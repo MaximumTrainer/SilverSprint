@@ -15,7 +15,7 @@
     "sourceMap": true,
     "outDir": "./dist",
     "rootDir": ".",
-    "types": ["vitest/globals", "vite/client"]
+    "types": ["vitest/globals", "vite/client", "node"]
   },
   "include": ["src/**/*", "api/**/*"],
   "exclude": ["node_modules", "dist"]
