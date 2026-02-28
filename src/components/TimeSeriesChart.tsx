@@ -9,14 +9,9 @@ import {
   CartesianGrid,
   ReferenceLine,
 } from 'recharts';
+import type { DailyDataPoint } from '../domain/types';
 
-export interface DailyDataPoint {
-  date: string;
-  dayLabel: string;
-  nfi: number | null;
-  tsb: number | null;
-  recoveryHours: number | null;
-}
+export type { DailyDataPoint };
 
 interface TimeSeriesChartProps {
   data: DailyDataPoint[];

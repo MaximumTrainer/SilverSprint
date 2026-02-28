@@ -1,4 +1,4 @@
-import { NFIStatus } from './logic';
+import type { NFIStatus } from '../types';
 
 export interface SprintBlock {
   name: string;
@@ -20,15 +20,38 @@ export interface SprintWorkout {
   workoutDescription: string;
 }
 
+/** Optional context for smarter workout selection (TSB, days since last sprint) */
+export interface SprintContext {
+  /** Training Stress Balance — positive = fresh, negative = fatigued */
+  tsb: number;
+}
+
+/**
+ * Detects "stale Vmax" — NFI is depressed not because of fatigue but because
+ * the athlete hasn't sprinted recently while overall training load is low.
+ *
+ * Condition: NFI is amber/red AND TSB ≥ 0 (athlete is objectively fresh).
+ */
+export function isStaleVmax(nfiStatus: NFIStatus, context?: SprintContext): boolean {
+  if (!context) return false;
+  return (nfiStatus === 'red' || nfiStatus === 'amber') && context.tsb >= 0;
+}
+
 /**
  * Sprint workout generator based on Neural Fatigue Index status.
  *
  * Green (NFI > 97%): Full max velocity session — block starts, flying sprints, full 60m reps
  * Amber (NFI 94–97%): Technical focus — drill-based, shorter accelerations, reduced volume
- * Red (NFI < 94%): Active recovery only — no sprinting
+ * Red (NFI < 94%) + fatigued TSB: Active recovery only — no sprinting
+ * Red/Amber (NFI < 97%) + fresh TSB: Neural Re-Activation — progressive sprints to restore Vmax
  */
 export class SprintWorkoutGenerator {
-  static generate(nfiStatus: NFIStatus, nfi: number): SprintWorkout {
+  static generate(nfiStatus: NFIStatus, nfi: number, context?: SprintContext): SprintWorkout {
+    // Stale Vmax pathway: NFI is low but athlete is fresh — re-activate, don't rest
+    if (isStaleVmax(nfiStatus, context)) {
+      return this.reactivationWorkout(nfi, context!.tsb);
+    }
+
     switch (nfiStatus) {
       case 'green':
         return this.greenWorkout(nfi);
@@ -171,6 +194,63 @@ export class SprintWorkoutGenerator {
       cooldown,
       totalSprintVolume: '0m sprint distance',
       workoutDescription: this.formatDescription('red', nfi, warmup, mainSet, cooldown, '0m'),
+    };
+  }
+
+  /**
+   * Neural Re-Activation session for stale Vmax.
+   *
+   * Prescribed when NFI is depressed but TSB is positive — the athlete is fresh
+   * but hasn't performed quality sprint work recently, causing Vmax to drift
+   * below baseline. A controlled re-activation session restores neuromuscular
+   * coordination without the overload risk of a full max-velocity day.
+   */
+  private static reactivationWorkout(nfi: number, tsb: number): SprintWorkout {
+    const warmup = [
+      '10 min easy jog',
+      'Dynamic stretching circuit (leg swings, walking lunges, high knees)',
+      '4 × 60m progressive build-ups (50%, 65%, 80%, 90%)',
+    ];
+    const mainSet: SprintBlock[] = [
+      {
+        name: 'Standing Accelerations',
+        reps: 3,
+        distance: '30m',
+        rest: '3 min walk-back',
+        intensity: '90–95%',
+        cue: 'Smooth acceleration. Focus on shin angles and arm drive — no straining.',
+      },
+      {
+        name: 'Flying 20s',
+        reps: 3,
+        distance: '20m (15m run-in)',
+        rest: '3 min walk-back',
+        intensity: '93–97%',
+        cue: 'Re-engage top-speed neural pathways. Relaxed face, fast feet, tall hips.',
+      },
+      {
+        name: 'Wicket Runs',
+        reps: 3,
+        distance: '20m (mini-hurdle spacing)',
+        rest: '2 min walk-back',
+        intensity: 'Controlled',
+        cue: 'Cadence and front-side mechanics. Reinforce stride pattern.',
+      },
+    ];
+    const cooldown = [
+      '10 min easy jog',
+      'Static stretching — hamstrings, hip flexors, calves (30s holds)',
+    ];
+
+    return {
+      name: 'Neural Re-Activation — Restore Sprint Speed',
+      status: 'red',
+      rationale: `NFI at ${(nfi * 100).toFixed(1)}% but TSB is ${tsb > 0 ? '+' : ''}${tsb.toFixed(1)} (fresh). Low Vmax is likely from detraining, not fatigue. This controlled re-activation session will restore neuromuscular coordination.`,
+      warmup,
+      mainSet,
+      cooldown,
+      totalSprintVolume: '~150m sprint distance',
+      workoutDescription: this.formatDescription('red', nfi, warmup, mainSet, cooldown, '~150m'),
     };
   }
 

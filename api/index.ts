@@ -1,7 +1,7 @@
-import { SprintParser } from '../src/logic/sprint-parser';
-import { SilverSprintLogic } from '../src/logic/logic';
-import { IntervalsCustomStreams } from '../src/logic/custom-streams';
-import { IntervalsActivitySchema } from '../src/schema';
+import { SprintParser } from '../src/domain/sprint/parser';
+import { SilverSprintLogic } from '../src/domain/sprint/core';
+import { IntervalsCustomStreams } from '../src/domain/sprint/custom-streams';
+import { IntervalsActivitySchema } from '../src/domain/schema';
 import { logger } from './logger';
 import { z } from 'zod';
 

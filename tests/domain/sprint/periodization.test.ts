@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { StrengthPeriodization } from './periodization';
+import { StrengthPeriodization } from '../../../src/domain/sprint/periodization';
 
 /**
  * Tests for README §3.3 — Strength Training Periodization Logic

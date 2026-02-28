@@ -40,13 +40,15 @@ export type IntervalsEvent = z.infer<typeof IntervalsEventSchema>;
 
 export const IntervalsAthleteSchema = z.object({
   id: z.union([z.string(), z.number()]).transform(String),
-  name: z.string().optional(),
+  name: z.string().nullable().optional(),
   /** Date of birth, ISO format e.g. "1980-06-15" */
-  dob: z.string().optional(),
-  /** Body weight in kg */
-  weight: z.number().optional(),
+  icu_date_of_birth: z.string().nullable().optional(),
+  /** Body weight in kg (from Strava sync) */
+  weight: z.number().nullable().optional(),
+  /** Body weight in kg (Intervals.icu setting) */
+  icu_weight: z.number().nullable().optional(),
   /** Sex: "M" | "F" | "X" */
-  sex: z.string().optional(),
+  sex: z.string().nullable().optional(),
 });
 
 export type IntervalsAthlete = z.infer<typeof IntervalsAthleteSchema>;

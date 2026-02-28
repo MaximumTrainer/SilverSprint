@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { SprintParser, TrackInterval } from '../logic/sprint-parser';
-import { SilverSprintLogic, HRVData, NFIStatus } from '../logic/logic';
-import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../logic/race-estimator';
-import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../logic/race-plan';
-import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsEventSchema, IntervalsAthleteSchema, IntervalsActivity, IntervalsWellness, IntervalsEvent } from '../schema';
+import { SprintParser, TrackInterval } from '../domain/sprint/parser';
+import { SilverSprintLogic, HRVData, NFIStatus } from '../domain/sprint/core';
+import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../domain/sprint/race-estimator';
+import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sprint/race-plan';
+import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsEventSchema, IntervalsAthleteSchema, IntervalsActivity, IntervalsWellness, IntervalsEvent } from '../domain/schema';
 import { clientLogger } from '../logger';
-import type { DailyDataPoint } from '../components/TimeSeriesChart';
+import type { DailyDataPoint } from '../domain/types';
 
 export interface IntervalsDataState {
   activities: IntervalsActivity[];
@@ -20,6 +20,8 @@ export interface IntervalsDataState {
   strengthZone: 'fresh' | 'tired' | 'fatigued';
   /** Sprint Recovery Score 0–100 (composite of HRV ratio, TSB, NFI) */
   srs: number;
+  /** true when NFI is depressed from detraining, not genuine fatigue */
+  staleVmax: boolean;
   age: number;
   bodyWeightKg: number | null;
   dailyTimeSeries: DailyDataPoint[];
@@ -53,6 +55,7 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
     tsb: 0,
     strengthZone: 'fresh',
     srs: 50,
+    staleVmax: false,
     age: 0,
     bodyWeightKg: null,
     dailyTimeSeries: [],
@@ -83,12 +86,11 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
 
         // 0. Process athlete profile for age & weight
         const rawProfile = profileRes.ok ? await profileRes.json() : {};
-        const profile = IntervalsAthleteSchema.safeParse(rawProfile).success
-          ? IntervalsAthleteSchema.parse(rawProfile)
-          : null;
+        const parseResult = IntervalsAthleteSchema.safeParse(rawProfile);
+        const profile = parseResult.success ? parseResult.data : null;
 
         /** Derive age from date-of-birth field */
-        function ageFromDob(dob?: string): number {
+        function ageFromDob(dob?: string | null): number {
           if (!dob) return 0;
           const birth = new Date(dob);
           const today = new Date();
@@ -98,10 +100,10 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
           return age;
         }
 
-        const athleteAge = ageFromDob(profile?.dob) || 0;
-        const profileWeightKg = typeof profile?.weight === 'number' && profile.weight > 0
-          ? profile.weight
-          : null;
+        const athleteAge = ageFromDob(profile?.icu_date_of_birth) || 0;
+        const profileWeightKg =
+          (typeof profile?.weight === 'number' && profile.weight > 0 ? profile.weight : null)
+          ?? (typeof profile?.icu_weight === 'number' && profile.icu_weight > 0 ? profile.icu_weight : null);
         clientLogger.info(`Athlete profile — age=${athleteAge}, weight=${profileWeightKg}`, athleteId);
 
         // 1. Process activities
@@ -176,7 +178,10 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         const strengthRx = SilverSprintLogic.getStrengthPrescription(tsb);
 
         const currentSRS = SilverSprintLogic.calculateSRS(hrvData, tsb, currentNFI);
-        const recoveryHours = SilverSprintLogic.getRecoveryWindow(athleteAge, currentSRS);
+        const smartRecovery = SilverSprintLogic.getSmartRecoveryWindow(athleteAge, hrvData, tsb, currentNFI);
+        const recoveryHours = smartRecovery.hours;
+        const adjustedSRS = smartRecovery.srs;
+        const staleVmax = smartRecovery.staleVmax;
 
         // 7. Build 60-day time series for charts
         const dailyTimeSeries = buildDailyTimeSeries(activities, wellnessEntries, avgVmax, avgHRV7d, athleteAge);
@@ -279,7 +284,8 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
           recoveryHours,
           tsb,
           strengthZone: strengthRx.zone,
-          srs: currentSRS,
+          srs: adjustedSRS,
+          staleVmax,
           age: athleteAge,
           bodyWeightKg,
           dailyTimeSeries,
@@ -360,12 +366,11 @@ function buildDailyTimeSeries(
       : avgHRV7d;
 
     // SRS: neutral fallbacks for days without activity or HRV data
-    const srs = SilverSprintLogic.calculateSRS(
-      { currentHRV: hrv ?? rollingAvg7d, avgHRV7d: rollingAvg7d },
-      tsb ?? 0,
-      nfi ?? 1.0,
-    );
-    const recoveryHours = SilverSprintLogic.getRecoveryWindow(age, srs);
+    const dayHrvData: HRVData = { currentHRV: hrv ?? rollingAvg7d, avgHRV7d: rollingAvg7d };
+    const dayNfi = nfi ?? 1.0;
+    const dayTsb = tsb ?? 0;
+    const smartRec = SilverSprintLogic.getSmartRecoveryWindow(age, dayHrvData, dayTsb, dayNfi);
+    const recoveryHours = smartRec.hours;
 
     series.push({ date: dateStr, dayLabel, nfi, tsb, recoveryHours });
   }

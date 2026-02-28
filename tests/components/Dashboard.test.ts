@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { SilverSprintLogic, NFIStatus } from '../logic/logic';
-import { StrengthPeriodization } from '../logic/periodization';
+import { SilverSprintLogic, NFIStatus, HRVData } from '../../src/domain/sprint/core';
+import { StrengthPeriodization } from '../../src/domain/sprint/periodization';
+import { isStaleVmax } from '../../src/domain/sprint/workouts';
 
 /**
  * Tests for README §4 — UI/UX Requirements
@@ -26,15 +27,20 @@ function getNFIColorClasses(status: NFIStatus) {
   }
 }
 
-// Mirrors the Dashboard's getNFIMessage logic
-function getNFIMessage(status: NFIStatus): string {
+// Mirrors the Dashboard's getNFIMessage logic (now TSB-aware)
+function getNFIMessage(status: NFIStatus, tsb?: number): string {
+  const stale = isStaleVmax(status, tsb != null ? { tsb } : undefined);
   switch (status) {
     case 'green':
       return 'CNS is primed for Max Velocity. Focus on block starts and flying 30s.';
     case 'amber':
-      return 'CNS suppression detected. Limit volume; focus on technical drills.';
+      return stale
+        ? 'Sprint speed below baseline but training load is low \u2014 a technical re-activation session is recommended.'
+        : 'CNS suppression detected. Limit volume; focus on technical drills.';
     case 'red':
-      return 'Danger Zone — significant neural fatigue. Rest or active recovery only.';
+      return stale
+        ? 'Sprint speed well below baseline but you are fresh \u2014 likely detraining, not fatigue. A controlled re-activation sprint session is recommended.'
+        : 'Danger Zone \u2014 significant neural fatigue. Rest or active recovery only.';
   }
 }
 
@@ -67,14 +73,31 @@ describe('Dashboard — Traffic Light Messages (§4)', () => {
     expect(msg).toMatch(/Max Velocity|block starts|flying/i);
   });
 
-  it('amber message warns about CNS suppression', () => {
-    const msg = getNFIMessage('amber');
+  it('amber message warns about CNS suppression when genuinely fatigued', () => {
+    const msg = getNFIMessage('amber', -10);
     expect(msg).toMatch(/suppression|limit volume|technical/i);
   });
 
-  it('red message indicates danger zone', () => {
-    const msg = getNFIMessage('red');
+  it('amber message recommends re-activation when fresh (stale Vmax)', () => {
+    const msg = getNFIMessage('amber', 5);
+    expect(msg).toMatch(/re-activation/i);
+    expect(msg).not.toMatch(/suppression/i);
+  });
+
+  it('red message indicates danger zone when fatigued', () => {
+    const msg = getNFIMessage('red', -15);
     expect(msg).toMatch(/danger|rest|recovery/i);
+  });
+
+  it('red message recommends re-activation when fresh (stale Vmax)', () => {
+    const msg = getNFIMessage('red', 5);
+    expect(msg).toMatch(/detraining|re-activation/i);
+    expect(msg).not.toMatch(/danger/i);
+  });
+
+  it('red message without TSB context defaults to danger zone', () => {
+    const msg = getNFIMessage('red');
+    expect(msg).toMatch(/danger/i);
   });
 });
 
@@ -172,7 +195,7 @@ describe('Dashboard — NFI is primary metric (§4)', () => {
   });
 });
 
-describe('Dashboard — Body Weight Auto-Detection from Intervals.icu (§3.3)', () => {
+describe('Dashboard \u2014 Body Weight Auto-Detection from Intervals.icu (\u00a73.3)', () => {
   it('uses bodyWeightKg from Intervals.icu wellness data when available', () => {
     // Simulates the logic in useIntervalsData: extract weight from wellness entries
     const wellnessEntries: Array<{ id: string; date: string; hrv: number; weight?: number }> = [

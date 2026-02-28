@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AuthGate } from './components/AuthGate';
 import { Dashboard, AthleteData } from './components/Dashboard';
 import { useIntervalsData } from './hooks/useIntervalsData';
-import { SprintWorkout } from './logic/sprint-workouts';
+import { SprintWorkout } from './domain/sprint/workouts';
 import { clientLogger } from './logger';
 import { AlertCircle, Zap } from 'lucide-react';
 
@@ -38,7 +38,7 @@ const App: React.FC = () => {
   // 2. Fetch data using our custom hook
   const {
     intervals, wellness, nfi, nfiStatus, avgVmax, todayVmax,
-    recoveryHours, tsb, strengthZone, srs, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, loading, error,
+    recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, loading, error,
   } = useIntervalsData(auth?.athleteId || '', auth?.apiKey || '');
 
   const handleLogout = () => {
@@ -69,17 +69,58 @@ const App: React.FC = () => {
           },
           body: JSON.stringify({
             category: 'WORKOUT',
-            start_date_local: date,
+            start_date_local: `${date}T00:00:00`,
+            type: 'Run',
             name: workout.name,
             description: workout.workoutDescription,
-            type: 'Run',
           }),
         },
       );
-      clientLogger.info(`Push result: ${res.ok ? 'success' : `HTTP ${res.status}`}`, auth.athleteId);
+      if (!res.ok) {
+        const body = await res.text();
+        clientLogger.error(`Push failed — HTTP ${res.status}: ${body}`, auth.athleteId);
+      } else {
+        clientLogger.info('Push workout success', auth.athleteId);
+      }
       return res.ok;
     } catch (err) {
       clientLogger.error('Push workout failed', auth.athleteId, err);
+      return false;
+    }
+  };
+
+  /** Push a key session from a race plan to the Intervals.icu calendar */
+  const handlePushSession = async (sessionName: string, raceName: string, date: string): Promise<boolean> => {
+    if (!auth) return false;
+    try {
+      clientLogger.info(`Pushing session "${sessionName}" for ${raceName} to ${date}`, auth.athleteId);
+      const authHeader = btoa(`API_KEY:${auth.apiKey}`);
+      const res = await fetch(
+        `/intervals/api/v1/athlete/${auth.athleteId}/events`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${authHeader}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            category: 'WORKOUT',
+            start_date_local: `${date}T00:00:00`,
+            type: 'Run',
+            name: `${raceName} Prep: ${sessionName}`,
+            description: `Race prep session for ${raceName}\n\n${sessionName}`,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.text();
+        clientLogger.error(`Push session failed — HTTP ${res.status}: ${body}`, auth.athleteId);
+      } else {
+        clientLogger.info('Push session success', auth.athleteId);
+      }
+      return res.ok;
+    } catch (err) {
+      clientLogger.error('Push session failed', auth.athleteId, err);
       return false;
     }
   };
@@ -148,6 +189,7 @@ const App: React.FC = () => {
     recoveryHours,
     srs,
     tsb,
+    staleVmax,
     bodyWeightKg,
   };
 
@@ -160,6 +202,7 @@ const App: React.FC = () => {
       sprintRacePlans={sprintRacePlans}
       onLogout={handleLogout}
       onPushWorkout={handlePushWorkout}
+      onPushSession={handlePushSession}
     />
   );
 };

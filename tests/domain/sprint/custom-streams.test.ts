@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { IntervalsCustomStreams } from './custom-streams';
+import { IntervalsCustomStreams } from '../../../src/domain/sprint/custom-streams';
 
 /**
  * Tests for README §5 — API & Webhook Specifications

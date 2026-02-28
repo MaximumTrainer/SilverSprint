@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { IntervalsActivitySchema, IntervalsWellnessSchema } from '../schema';
+import { IntervalsActivitySchema, IntervalsWellnessSchema } from '../../src/domain/schema';
 
 /**
  * Tests for README §2.2 — Data Ingestion Schema (Zod)

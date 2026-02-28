@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SprintRacePlanner, SprintRaceEvent, SprintRacePlan } from './race-plan';
+import { SprintRacePlanner, SprintRaceEvent, SprintRacePlan } from '../../../src/domain/sprint/race-plan';
 
 function makeRace(overrides: Partial<SprintRaceEvent> = {}): SprintRaceEvent {
   return {

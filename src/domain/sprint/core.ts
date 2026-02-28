@@ -1,15 +1,6 @@
-export interface HRVData {
-  currentHRV: number;
-  avgHRV7d: number;
-}
+import type { HRVData, StrengthPrescription, NFIStatus } from '../types';
 
-export interface StrengthPrescription {
-  zone: 'fresh' | 'tired' | 'fatigued';
-  intensity: 'high' | 'moderate' | 'none';
-  focus: string;
-}
-
-export type NFIStatus = 'green' | 'amber' | 'red';
+export type { HRVData, StrengthPrescription, NFIStatus };
 
 /** Base recovery period in hours before age adjustments */
 const RECOVERY_BASE_HOURS = 48;
@@ -59,6 +50,41 @@ export class SilverSprintLogic {
   static getRecoveryWindow(age: number, srs: number): number {
     const ageTaxBase = RECOVERY_BASE_HOURS + Math.max(0, (age - 40) * RECOVERY_AGE_HOURS_PER_YEAR);
     return ageTaxBase + Math.round((1 - srs / 100) * RECOVERY_SRS_MAX_PENALTY_HOURS);
+  }
+
+  /**
+   * Freshness-adjusted SRS that neutralises the NFI penalty when stale-Vmax
+   * is detected (low NFI + positive TSB = detraining, not fatigue).
+   *
+   * When the athlete is objectively fresh (TSB ≥ 0) but NFI is below green,
+   * the low Vmax reading is from inactivity rather than CNS overload. In this
+   * case the NFI component is replaced with a neutral baseline (NFI = 1.0)
+   * so the recovery score reflects actual physiological state.
+   *
+   * Falls back to standard SRS when the scenario doesn't apply.
+   */
+  static calculateFreshnessAdjustedSRS(hrv: HRVData, tsb: number, nfi: number): number {
+    const nfiStatus = SilverSprintLogic.getNFIStatus(nfi);
+    const isStale = (nfiStatus === 'red' || nfiStatus === 'amber') && tsb >= 0;
+    return SilverSprintLogic.calculateSRS(hrv, tsb, isStale ? 1.0 : nfi);
+  }
+
+  /**
+   * Context-aware recovery window that accounts for stale Vmax.
+   *
+   * Uses freshness-adjusted SRS so the recovery window reflects actual
+   * physiological recovery needs rather than being inflated by detraining.
+   *
+   * Example (age 49, HRV normal, TSB +2, NFI 0.92):
+   *   Standard:  SRS 59 → 122h
+   *   Adjusted:  SRS 79 → 112h  (NFI penalty neutralised)
+   */
+  static getSmartRecoveryWindow(age: number, hrv: HRVData, tsb: number, nfi: number): { hours: number; srs: number; staleVmax: boolean } {
+    const nfiStatus = SilverSprintLogic.getNFIStatus(nfi);
+    const staleVmax = (nfiStatus === 'red' || nfiStatus === 'amber') && tsb >= 0;
+    const srs = SilverSprintLogic.calculateFreshnessAdjustedSRS(hrv, tsb, nfi);
+    const hours = SilverSprintLogic.getRecoveryWindow(age, srs);
+    return { hours, srs, staleVmax };
   }
 
   /**

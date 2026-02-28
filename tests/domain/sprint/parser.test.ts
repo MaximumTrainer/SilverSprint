@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SprintParser, TrackInterval } from './sprint-parser';
+import { SprintParser, TrackInterval } from '../../../src/domain/sprint/parser';
 
 /**
  * Tests for README §3.1 — Velocity Metric Extraction

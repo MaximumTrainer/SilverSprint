@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import handler from './index';
+import handler from '../../api/index';
 
 /**
  * Tests for README §5 — API & Webhook Specifications

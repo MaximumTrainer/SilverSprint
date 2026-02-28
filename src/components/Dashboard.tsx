@@ -1,13 +1,15 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Zap, Activity, Dumbbell, User, LogOut, Send, Clock, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Info, Timer, Flag,
+  Zap, Activity, Dumbbell, User, LogOut, Send, Clock, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Info, Timer, Flag, Calendar,
 } from 'lucide-react';
-import { SilverSprintLogic, NFIStatus } from '../logic/logic';
-import { StrengthPeriodization } from '../logic/periodization';
-import { SprintWorkoutGenerator, SprintWorkout } from '../logic/sprint-workouts';
-import { RaceEstimate } from '../logic/race-estimator';
-import { SprintRacePlan, PriorRaceContext } from '../logic/race-plan';
-import { TimeSeriesChart, DailyDataPoint } from './TimeSeriesChart';
+import { SilverSprintLogic, NFIStatus } from '../domain/sprint/core';
+import { StrengthPeriodization } from '../domain/sprint/periodization';
+import { SprintWorkoutGenerator, SprintWorkout, isStaleVmax } from '../domain/sprint/workouts';
+import { RaceEstimate } from '../domain/sprint/race-estimator';
+import { SprintRacePlan, PriorRaceContext } from '../domain/sprint/race-plan';
+import { TimeSeriesChart } from './TimeSeriesChart';
+import type { DailyDataPoint } from '../domain/types';
+import { SpringTrainingPanel } from './SpringTrainingPanel';
 
 export interface AthleteData {
   name: string;
@@ -19,6 +21,8 @@ export interface AthleteData {
   recoveryHours: number;
   srs: number;
   tsb: number;
+  /** true when NFI is depressed from detraining, not genuine fatigue */
+  staleVmax: boolean;
   bodyWeightKg: number | null;
 }
 
@@ -31,6 +35,7 @@ interface DashboardProps {
   sprintRacePlans: SprintRacePlan[];
   onLogout: () => void;
   onPushWorkout: (workout: SprintWorkout, date: string) => Promise<boolean>;
+  onPushSession: (sessionName: string, raceName: string, date: string) => Promise<boolean>;
 }
 
 /* ── Helpers ─────────────────────────────────────────────────── */
@@ -46,14 +51,19 @@ function getNFIColorClasses(status: NFIStatus) {
   }
 }
 
-function getNFIMessage(status: NFIStatus): string {
+function getNFIMessage(status: NFIStatus, tsb?: number): string {
+  const stale = isStaleVmax(status, tsb != null ? { tsb } : undefined);
   switch (status) {
     case 'green':
       return 'CNS is primed for Max Velocity. Focus on block starts and flying 30s.';
     case 'amber':
-      return 'CNS suppression detected. Limit volume; focus on technical drills.';
+      return stale
+        ? 'Sprint speed below baseline but training load is low — a technical re-activation session is recommended.'
+        : 'CNS suppression detected. Limit volume; focus on technical drills.';
     case 'red':
-      return 'Danger Zone — significant neural fatigue. Rest or active recovery only.';
+      return stale
+        ? 'Sprint speed well below baseline but you are fresh — likely detraining, not fatigue. A controlled re-activation sprint session is recommended.'
+        : 'Danger Zone — significant neural fatigue. Rest or active recovery only.';
   }
 }
 
@@ -83,6 +93,87 @@ function getTomorrowDate(): string {
   return d.toISOString().split('T')[0];
 }
 
+/** Inline pushable session item with date picker */
+const SessionPushItem: React.FC<{
+  session: string;
+  raceName: string;
+  onPush: (sessionName: string, raceName: string, date: string) => Promise<boolean>;
+}> = ({ session, raceName, onPush }) => {
+  const [expanded, setExpanded] = useState(false);
+  const [date, setDate] = useState(getTomorrowDate());
+  const [state, setState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  const handlePush = async () => {
+    setState('loading');
+    try {
+      const ok = await onPush(session, raceName, date);
+      setState(ok ? 'success' : 'error');
+    } catch {
+      setState('error');
+    }
+    setTimeout(() => { setState('idle'); setExpanded(false); }, 3000);
+  };
+
+  return (
+    <li style={{ fontSize: 12, color: 'var(--icu-text-secondary)', lineHeight: 1.7, listStyle: 'none', marginBottom: expanded ? 6 : 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ flex: 1 }}>{session}</span>
+        <button
+          onClick={() => setExpanded(!expanded)}
+          title="Schedule on Intervals.icu"
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: 2,
+            color: expanded ? 'var(--icu-primary)' : 'var(--icu-text-disabled)',
+            display: 'flex',
+            alignItems: 'center',
+            transition: 'color 0.15s',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--icu-primary)')}
+          onMouseLeave={(e) => { if (!expanded) e.currentTarget.style.color = 'var(--icu-text-disabled)'; }}
+        >
+          <Calendar size={13} />
+        </button>
+      </div>
+      {expanded && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6, marginTop: 4,
+          padding: '4px 8px', borderRadius: 4,
+          background: 'var(--icu-surface)', border: '1px solid var(--icu-border)',
+        }}>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            style={{
+              background: 'var(--icu-bg)', color: 'var(--icu-text)',
+              border: '1px solid var(--icu-border)', borderRadius: 3,
+              padding: '2px 6px', fontSize: 11, fontFamily: 'inherit',
+            }}
+          />
+          <button
+            onClick={handlePush}
+            disabled={state === 'loading' || state === 'success'}
+            className="icu-btn-ghost"
+            style={{
+              padding: '2px 8px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4,
+              color: state === 'success' ? 'var(--icu-green)' : state === 'error' ? 'var(--icu-red)' : 'var(--icu-primary)',
+            }}
+          >
+            {state === 'loading' && <Clock size={11} className="animate-spin" />}
+            {state === 'success' && <CheckCircle size={11} />}
+            {state === 'error' && <XCircle size={11} />}
+            {state === 'idle' && <Send size={11} />}
+            {state === 'idle' ? 'Push' : state === 'loading' ? 'Pushing…' : state === 'success' ? 'Pushed!' : 'Failed'}
+          </button>
+        </div>
+      )}
+    </li>
+  );
+};
+
 const InfoTooltip: React.FC<{ text: string }> = ({ text }) => (
   <span className="icu-tooltip-wrapper" style={{ marginLeft: 4 }}>
     <Info size={12} style={{ color: 'var(--icu-text-disabled)' }} />
@@ -100,11 +191,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
   sprintRacePlans,
   onLogout,
   onPushWorkout,
+  onPushSession,
 }) => {
   const { nfi, nfiStatus } = athleteData;
   const colors = getNFIColorClasses(nfiStatus);
   const prescription = useMemo(() => StrengthPeriodization.getPrescription(athleteData.tsb), [athleteData.tsb]);
-  const sprintWorkout = useMemo(() => SprintWorkoutGenerator.generate(nfiStatus, nfi), [nfiStatus, nfi]);
+  const sprintWorkout = useMemo(() => SprintWorkoutGenerator.generate(nfiStatus, nfi, { tsb: athleteData.tsb }), [nfiStatus, nfi, athleteData.tsb]);
 
   const [bodyWeight, setBodyWeight] = useState<string>(
     athleteData.bodyWeightKg != null ? String(athleteData.bodyWeightKg) : ''
@@ -200,10 +292,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* ── Summary Cards Row ────────────────────────────── */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 16 }}>
           {/* Neural Readiness */}
-          <div className={`icu-stat ${colors.border}`} style={{ borderLeft: `3px solid` }}>
+          <div className="icu-stat" style={{ borderLeft: `3px solid ${nfiStatus === 'green' ? 'var(--icu-green)' : nfiStatus === 'amber' ? 'var(--icu-amber)' : 'var(--icu-red)'}` }}>
             <div className="icu-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <StatusIcon status={nfiStatus} size={14} /> Neural Readiness
-              <InfoTooltip text="Neural Fatigue Index (NFI) = today's Vmax ÷ 30-day avg Vmax. Green > 97%: CNS primed for max velocity. Amber 94–97%: limit volume, focus on technique. Red < 94%: significant fatigue — rest or active recovery only." />
+              <InfoTooltip text="Neural Fatigue Index (NFI) = today's Vmax ÷ 30-day avg Vmax. Green > 97%: CNS primed for max velocity. Amber 94–97%: limit volume, focus on technique. Red < 94%: if TSB is negative, significant fatigue — rest needed. If TSB is positive, likely detraining — a re-activation sprint session is recommended." />
             </div>
             <div className="icu-stat-value" style={{ color: nfiStatus === 'green' ? 'var(--icu-green)' : nfiStatus === 'amber' ? 'var(--icu-amber)' : 'var(--icu-red)' }}>
               {(nfi * 100).toFixed(1)}<span style={{ fontSize: 14, fontWeight: 400 }}>%</span>
@@ -228,16 +320,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
 
           {/* Recovery */}
-          <div className="icu-stat" style={{ borderLeft: '3px solid var(--icu-primary)' }}>
+          <div className="icu-stat" style={{ borderLeft: `3px solid ${athleteData.staleVmax ? 'var(--icu-green)' : 'var(--icu-primary)'}` }}>
             <div className="icu-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Clock size={14} style={{ color: 'var(--icu-primary)' }} /> Recovery Window
-              <InfoTooltip text="Minimum hours between max-effort sessions. Driven by Sprint Recovery Score (SRS 0–100): composite of HRV ratio (45%), Training Stress Balance (30%), and Neural Fatigue Index (25%). Base: 48h + (Age−40)×6h. SRS penalty adds up to 48h — so range for age 45 is 78–126h." />
+              <Clock size={14} style={{ color: athleteData.staleVmax ? 'var(--icu-green)' : 'var(--icu-primary)' }} /> Recovery Window
+              <InfoTooltip text={athleteData.staleVmax
+                ? "Recovery window adjusted for freshness. Your low NFI is from inactivity (stale Vmax) rather than fatigue, so the NFI penalty has been neutralised. The window reflects your actual physiological recovery state based on HRV and Training Stress Balance."
+                : "Minimum hours between max-effort sessions. Driven by Sprint Recovery Score (SRS 0–100): composite of HRV ratio (45%), Training Stress Balance (30%), and Neural Fatigue Index (25%). Base: 48h + (Age−40)×6h. SRS penalty adds up to 48h — so range for age 45 is 78–126h."
+              } />
             </div>
-            <div className="icu-stat-value" style={{ color: 'var(--icu-primary)' }}>
+            <div className="icu-stat-value" style={{ color: athleteData.staleVmax ? 'var(--icu-green)' : 'var(--icu-primary)' }}>
               {athleteData.recoveryHours}<span style={{ fontSize: 14, fontWeight: 400 }}>h</span>
             </div>
             <div style={{ fontSize: 11, color: 'var(--icu-text-disabled)', marginTop: 2 }}>
-              Age {athleteData.age} · SRS {athleteData.srs}/100
+              Age {athleteData.age} · SRS {athleteData.srs}/100{athleteData.staleVmax ? ' · Freshness adjusted' : ''}
             </div>
           </div>
         </div>
@@ -258,9 +353,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
             gap: 6,
           }}
         >
-          {getNFIMessage(nfiStatus)}
+          {getNFIMessage(nfiStatus, athleteData.tsb)}
           {nfiStatus === 'red' && (
-            <InfoTooltip text="Danger Zone triggers when NFI drops below 94% (Vmax significantly below your 30-day baseline). This indicates accumulated CNS fatigue — continuing high-intensity work risks injury or prolonged performance loss. Prioritise sleep, nutrition, and light movement until NFI recovers above 97%." />
+            <InfoTooltip text={
+              isStaleVmax(nfiStatus, { tsb: athleteData.tsb })
+                ? "NFI is below 94% but your TSB is positive (fresh). This usually means your Vmax has drifted down from inactivity rather than accumulated fatigue. A controlled re-activation sprint session will help restore neuromuscular coordination and bring Vmax back to baseline."
+                : "Danger Zone triggers when NFI drops below 94% (Vmax significantly below your 30-day baseline). This indicates accumulated CNS fatigue — continuing high-intensity work risks injury or prolonged performance loss. Prioritise sleep, nutrition, and light movement until NFI recovers above 97%."
+            } />
           )}
         </div>
 
@@ -375,7 +474,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </div>
                     </div>
 
-                    {/* Panel 3a (primary race): Key Sessions now */}
+                    {/* Panel 3a (primary race): Key Sessions now — clickable to push to Intervals.icu */}
                     {isPrimary && (
                       <div className="icu-card-elevated" style={{ padding: '12px 14px' }}>
                         <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--icu-text-secondary)', marginBottom: 6 }}>
@@ -383,7 +482,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
                         <ul style={{ paddingLeft: 14, margin: 0 }}>
                           {plan.currentPhase.sessions.map((s, i) => (
-                            <li key={i} style={{ fontSize: 12, color: 'var(--icu-text-secondary)', lineHeight: 1.7 }}>{s}</li>
+                            <SessionPushItem key={i} session={s} raceName={plan.race.name} onPush={onPushSession} />
                           ))}
                         </ul>
                       </div>
@@ -405,7 +504,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
                         <ul style={{ paddingLeft: 14, margin: 0 }}>
                           {ctx.postRecoveryPhase.sessions.map((s, i) => (
-                            <li key={i} style={{ fontSize: 12, color: 'var(--icu-text-secondary)', lineHeight: 1.7 }}>{s}</li>
+                            <SessionPushItem key={i} session={s} raceName={plan.race.name} onPush={onPushSession} />
                           ))}
                         </ul>
                         <div style={{ fontSize: 11, color: 'var(--icu-text-disabled)', marginTop: 6 }}>
@@ -779,6 +878,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
             })}
           </div>
         </div>
+
+        {/* ── Spring Training — Fascia Module ──────────────── */}
+        <SpringTrainingPanel />
+
       </main>
     </div>
   );

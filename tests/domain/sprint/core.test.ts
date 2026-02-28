@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SilverSprintLogic } from './logic';
+import { SilverSprintLogic } from '../../../src/domain/sprint/core';
 
 /**
  * Tests for README §3.2 — Neural Fatigue Index, Sprint Recovery Score & Age Tax
@@ -107,6 +107,80 @@ describe('SilverSprintLogic.getRecoveryWindow (§3.2)', () => {
     const high = SilverSprintLogic.getRecoveryWindow(45, 80);
     const low = SilverSprintLogic.getRecoveryWindow(45, 30);
     expect(low).toBeGreaterThan(high);
+  });
+});
+
+/**
+ * Freshness-adjusted SRS — neutralises NFI penalty when stale Vmax detected.
+ * When TSB ≥ 0 and NFI is amber/red, the low NFI is from detraining, not fatigue.
+ */
+describe('SilverSprintLogic.calculateFreshnessAdjustedSRS', () => {
+  const normalHrv: { currentHRV: number; avgHRV7d: number } = { currentHRV: 60, avgHRV7d: 60 };
+
+  it('returns higher SRS than standard when stale Vmax (red NFI + positive TSB)', () => {
+    const standard = SilverSprintLogic.calculateSRS(normalHrv, 2, 0.92);
+    const adjusted = SilverSprintLogic.calculateFreshnessAdjustedSRS(normalHrv, 2, 0.92);
+    expect(adjusted).toBeGreaterThan(standard);
+  });
+
+  it('returns same as standard SRS when green NFI', () => {
+    const standard = SilverSprintLogic.calculateSRS(normalHrv, 5, 1.0);
+    const adjusted = SilverSprintLogic.calculateFreshnessAdjustedSRS(normalHrv, 5, 1.0);
+    expect(adjusted).toBe(standard);
+  });
+
+  it('returns same as standard SRS when NFI is low but TSB is negative (genuinely fatigued)', () => {
+    const standard = SilverSprintLogic.calculateSRS(normalHrv, -10, 0.92);
+    const adjusted = SilverSprintLogic.calculateFreshnessAdjustedSRS(normalHrv, -10, 0.92);
+    expect(adjusted).toBe(standard);
+  });
+
+  it('neutralises NFI penalty for amber NFI with zero TSB', () => {
+    const standard = SilverSprintLogic.calculateSRS(normalHrv, 0, 0.95);
+    const adjusted = SilverSprintLogic.calculateFreshnessAdjustedSRS(normalHrv, 0, 0.95);
+    expect(adjusted).toBeGreaterThan(standard);
+  });
+});
+
+/**
+ * Smart recovery window — context-aware, accounts for stale Vmax.
+ */
+describe('SilverSprintLogic.getSmartRecoveryWindow', () => {
+  const normalHrv: { currentHRV: number; avgHRV7d: number } = { currentHRV: 60, avgHRV7d: 60 };
+
+  it('returns shorter recovery than standard when stale Vmax detected', () => {
+    const standardSRS = SilverSprintLogic.calculateSRS(normalHrv, 2, 0.92);
+    const standardHours = SilverSprintLogic.getRecoveryWindow(49, standardSRS);
+    const smart = SilverSprintLogic.getSmartRecoveryWindow(49, normalHrv, 2, 0.92);
+    expect(smart.hours).toBeLessThan(standardHours);
+    expect(smart.staleVmax).toBe(true);
+    expect(smart.srs).toBeGreaterThan(standardSRS);
+  });
+
+  it('returns same recovery as standard when genuinely fatigued', () => {
+    const standardSRS = SilverSprintLogic.calculateSRS(normalHrv, -15, 0.92);
+    const standardHours = SilverSprintLogic.getRecoveryWindow(49, standardSRS);
+    const smart = SilverSprintLogic.getSmartRecoveryWindow(49, normalHrv, -15, 0.92);
+    expect(smart.hours).toBe(standardHours);
+    expect(smart.staleVmax).toBe(false);
+    expect(smart.srs).toBe(standardSRS);
+  });
+
+  it('returns same recovery as standard when green NFI', () => {
+    const standardSRS = SilverSprintLogic.calculateSRS(normalHrv, 5, 1.0);
+    const standardHours = SilverSprintLogic.getRecoveryWindow(45, standardSRS);
+    const smart = SilverSprintLogic.getSmartRecoveryWindow(45, normalHrv, 5, 1.0);
+    expect(smart.hours).toBe(standardHours);
+    expect(smart.staleVmax).toBe(false);
+  });
+
+  it('mirrors user scenario: age 49, NFI 0.92, TSB +2.37, normal HRV', () => {
+    // Standard: SRS ≈ 59, recovery ≈ 122h
+    // Smart: SRS ≈ 79, recovery ≈ 112h (NFI penalty neutralised)
+    const smart = SilverSprintLogic.getSmartRecoveryWindow(49, normalHrv, 2.37, 0.92);
+    expect(smart.staleVmax).toBe(true);
+    expect(smart.hours).toBeLessThan(122);
+    expect(smart.srs).toBeGreaterThan(59);
   });
 });
 

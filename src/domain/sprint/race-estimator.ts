@@ -1,5 +1,5 @@
-import { NFIStatus } from './logic';
-import { TrackInterval } from './sprint-parser';
+import type { NFIStatus } from '../types';
+import type { TrackInterval } from './parser';
 
 /**
  * Age degradation rate: ~0.7% per year past age 35.
