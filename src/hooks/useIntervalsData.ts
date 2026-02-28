@@ -126,8 +126,8 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         const wellnessEntries: IntervalsWellness[] = Array.isArray(rawWellness)
           ? rawWellness
               .map((w: unknown) => IntervalsWellnessSchema.safeParse(w))
-              .filter((r: { success: boolean }) => r.success)
-              .map((r: { success: true; data: IntervalsWellness }) => r.data)
+              .filter((r): r is { success: true; data: IntervalsWellness } => r.success)
+              .map((r) => r.data)
           : [];
 
         const latestWellness = wellnessEntries[0] || null;
@@ -227,8 +227,8 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
             clientLogger.info(`Events API returned ${Array.isArray(rawEvents) ? rawEvents.length : 0} event(s)`, athleteId);
             const events: IntervalsEvent[] = (Array.isArray(rawEvents) ? rawEvents : [])
               .map((e: unknown) => IntervalsEventSchema.safeParse(e))
-              .filter((r: { success: boolean }) => r.success)
-              .map((r: { success: true; data: IntervalsEvent }) => r.data)
+              .filter((r): r is { success: true; data: IntervalsEvent } => r.success)
+              .map((r) => r.data)
               .filter((e) => {
                 // Filter to sprint races: type Run, distance < 800m
                 const distM = e.distance ?? e.distance_target ?? 0;
@@ -347,7 +347,7 @@ function buildDailyTimeSeries(
     const hrv = wellByDate.get(dateStr);
 
     const nfi = act && avgVmax > 0 ? act.max_speed / avgVmax : null;
-    const tsb = act ? (act.icu_ctl - act.icu_atl) : lastTsb;
+    const tsb: number | null = act ? (act.icu_ctl - act.icu_atl) : lastTsb;
     if (tsb != null) lastTsb = tsb;
 
     // Per-day rolling 7d HRV avg using only entries up to and including this day
