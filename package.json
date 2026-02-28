@@ -2,6 +2,7 @@
   "name": "silversprint-api",
   "version": "1.0.0",
   "description": "Masters Track & Field Speed Development Engine",
+  "license": "MIT",
   "main": "src/index.ts",
   "scripts": {
     "dev": "vite",
