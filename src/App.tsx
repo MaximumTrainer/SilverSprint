@@ -5,6 +5,7 @@ import { useIntervalsData } from './hooks/useIntervalsData';
 import { SprintWorkout } from './domain/sprint/workouts';
 import { clientLogger } from './logger';
 import { AlertCircle, Zap } from 'lucide-react';
+import { INTERVALS_BASE } from './config/api';
 
 const App: React.FC = () => {
   const [auth, setAuth] = useState<{ athleteId: string; apiKey: string } | null>(null);
@@ -60,7 +61,7 @@ const App: React.FC = () => {
       clientLogger.info(`Pushing workout "${workout.name}" to ${date}`, auth.athleteId);
       const authHeader = btoa(`API_KEY:${auth.apiKey}`);
       const res = await fetch(
-        `/intervals/api/v1/athlete/${auth.athleteId}/events`,
+        `${INTERVALS_BASE}/api/v1/athlete/${auth.athleteId}/events`,
         {
           method: 'POST',
           headers: {
@@ -96,7 +97,7 @@ const App: React.FC = () => {
       clientLogger.info(`Pushing session "${sessionName}" for ${raceName} to ${date}`, auth.athleteId);
       const authHeader = btoa(`API_KEY:${auth.apiKey}`);
       const res = await fetch(
-        `/intervals/api/v1/athlete/${auth.athleteId}/events`,
+        `${INTERVALS_BASE}/api/v1/athlete/${auth.athleteId}/events`,
         {
           method: 'POST',
           headers: {
