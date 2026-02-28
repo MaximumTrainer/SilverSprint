@@ -42,6 +42,7 @@ function clientLogPlugin(): Plugin {
 }
 
 export default defineConfig({
+  base: './',
   envPrefix: ['VITE_', 'INTERVALS_'],
   plugins: [react(), tailwindcss(), clientLogPlugin()],
   server: {

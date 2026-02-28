@@ -6,6 +6,7 @@ import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sp
 import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsEventSchema, IntervalsAthleteSchema, IntervalsActivity, IntervalsWellness, IntervalsEvent } from '../domain/schema';
 import { clientLogger } from '../logger';
 import type { DailyDataPoint } from '../domain/types';
+import { INTERVALS_BASE } from '../config/api';
 
 export interface IntervalsDataState {
   activities: IntervalsActivity[];
@@ -79,9 +80,9 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         clientLogger.info('Fetching profile, activities, and wellness in parallel', athleteId);
 
         const [profileRes, activitiesRes, wellnessRes] = await Promise.all([
-          fetch(`/intervals/api/v1/athlete/${athleteId}`, { headers }),
-          fetch(`/intervals/api/v1/athlete/${athleteId}/activities?oldest=${oldest}&newest=${newest}`, { headers }),
-          fetch(`/intervals/api/v1/athlete/${athleteId}/wellness?oldest=${oldest}&newest=${newest}`, { headers }),
+          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}`, { headers }),
+          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/activities?oldest=${oldest}&newest=${newest}`, { headers }),
+          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/wellness?oldest=${oldest}&newest=${newest}`, { headers }),
         ]);
 
         // 0. Process athlete profile for age & weight
@@ -224,7 +225,7 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
           // Race categories are RACE_A, RACE_B, RACE_C in Intervals.icu
           // The list endpoint requires a format suffix (.json) in the path
           const eventsRes = await fetch(
-            `/intervals/api/v1/athlete/${athleteId}/events.json?oldest=${todayDate}&newest=${futureDate}&category=RACE_A&category=RACE_B&category=RACE_C`,
+            `${INTERVALS_BASE}/api/v1/athlete/${athleteId}/events.json?oldest=${todayDate}&newest=${futureDate}&category=RACE_A&category=RACE_B&category=RACE_C`,
             { headers }
           );
           if (eventsRes.ok) {
