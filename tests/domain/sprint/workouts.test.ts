@@ -46,9 +46,9 @@ describe('SprintWorkoutGenerator', () => {
     it('workout description is a formatted multi-line string', () => {
       expect(workout.workoutDescription).toContain('SilverSprint');
       expect(workout.workoutDescription).toContain('GREEN');
-      expect(workout.workoutDescription).toContain('WARM-UP');
-      expect(workout.workoutDescription).toContain('MAIN SET');
-      expect(workout.workoutDescription).toContain('COOL-DOWN');
+      expect(workout.workoutDescription).toContain('Warmup');
+      expect(workout.workoutDescription).toContain('Block Starts');
+      expect(workout.workoutDescription).toContain('Cooldown');
     });
   });
 
