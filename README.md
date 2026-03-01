@@ -242,6 +242,10 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 
 ---
 
+### Test It Out
+If you want to try this online, go to https://maximumtrainer.github.io/SilverSprint/ you will need your intervals.icu id and api key
+
+
 ## Getting Started
 
 ### Prerequisites
