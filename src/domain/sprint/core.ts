@@ -126,4 +126,34 @@ export class SilverSprintLogic {
     if (nfi >= 0.94) return 'amber';
     return 'red';
   }
+
+  /**
+   * Compute a TSB that accounts for total training load across all interval types.
+   *
+   * The standard `tsb = ctl − atl` uses Intervals.icu's rolling ATL, which is a
+   * 7-day EMA of session training load. When interval-level data is available for
+   * recent sessions, summing `icu_training_load` across **all** interval types
+   * (including WARMUP, COOLDOWN, REST, ACTIVE_REST) provides an independent
+   * measure of recent load. If this interval-derived average exceeds the
+   * activity-level ATL, we use the higher value so that non-sprint training load
+   * is not underestimated.
+   *
+   * @param ctl  Chronic Training Load from the latest activity
+   * @param atl  Acute Training Load from the latest activity
+   * @param totalIntervalLoad  Sum of `icu_training_load` across ALL interval types
+   *                           from recent sessions (not filtered to WORK only)
+   * @param sessionCount  Number of sessions whose intervals were aggregated
+   */
+  static computeIntervalAdjustedTSB(
+    ctl: number,
+    atl: number,
+    totalIntervalLoad: number,
+    sessionCount: number,
+  ): number {
+    if (sessionCount <= 0) return ctl - atl;
+    if (totalIntervalLoad <= 0) return ctl - atl;
+    const intervalDerivedATL = totalIntervalLoad / sessionCount;
+    const effectiveATL = Math.max(atl, intervalDerivedATL);
+    return ctl - effectiveATL;
+  }
 }
