@@ -1,7 +1,7 @@
-import { SprintParser } from '../src/domain/sprint/parser';
+import { SprintParser, TrackInterval } from '../src/domain/sprint/parser';
 import { SilverSprintLogic } from '../src/domain/sprint/core';
 import { IntervalsCustomStreams } from '../src/domain/sprint/custom-streams';
-import { IntervalsActivitySchema } from '../src/domain/schema';
+import { IntervalsActivitySchema, IntervalsIntervalSchema } from '../src/domain/schema';
 import { logger } from './logger';
 import { z } from 'zod';
 
@@ -90,7 +90,27 @@ export default async function handler(req: ServerlessRequest, res: ServerlessRes
     }
 
     // 3. Parse sprint metrics
-    const intervals = SprintParser.parseTrackSession(parsed.data);
+    // Prefer structured interval data from the /intervals endpoint (more accurate
+    // than re-parsing the raw velocity stream).
+    const intervalsRes = await fetch(
+      `https://intervals.icu/api/v1/activity/${id}/intervals`,
+      { headers }
+    );
+    const rawIntervals = intervalsRes.ok ? await intervalsRes.json() : [];
+    const apiIntervals = Array.isArray(rawIntervals)
+      ? rawIntervals
+          .map((i: unknown) => {
+            const parsed = IntervalsIntervalSchema.safeParse(i);
+            if (!parsed.success) return null;
+            return SprintParser.fromAPIInterval(parsed.data);
+          })
+          .filter((i): i is TrackInterval => i !== null)
+      : [];
+
+    const intervals = apiIntervals.length > 0
+      ? apiIntervals
+      : SprintParser.parseTrackSession(parsed.data);
+
     const todayVmax = parsed.data.max_speed;
 
     // Fetch recent activities for 30-day baseline

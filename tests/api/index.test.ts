@@ -54,6 +54,12 @@ const mockRecentActivities = [
   { id: 'act_004', type: 'Run', max_speed: 9.3 },
 ];
 
+const mockIntervals = [
+  { type: 'WORK', distance: 30, moving_time: 4, max_speed: 9.5, average_speed: 8.0 },
+  { type: 'REST', distance: 5, moving_time: 60, max_speed: 1.0, average_speed: 0.5 },
+  { type: 'WORK', distance: 60, moving_time: 7, max_speed: 9.8, average_speed: 8.6 },
+];
+
 beforeEach(() => {
   vi.restoreAllMocks();
 });
@@ -106,6 +112,14 @@ describe('Webhook handler — full pipeline with mocked fetch (§5)', () => {
 
     const mockFetch = vi.fn(async (url: string, opts?: any) => {
       fetchCalls.push({ url, method: opts?.method || 'GET' });
+
+      // Intervals fetch (checked before activity to avoid ambiguity with the domain name)
+      if (url.includes('/api/v1/activity/act_001/intervals')) {
+        return {
+          ok: true,
+          json: async () => mockIntervals,
+        };
+      }
 
       // Activity fetch
       if (url.includes('/api/v1/activity/act_001') && !url.includes('/streams')) {
@@ -172,11 +186,14 @@ describe('Webhook handler — full pipeline with mocked fetch (§5)', () => {
     expect(res.body.streamPushed).toBe(true);
 
     // Verify the right API calls were made:
-    // 1. GET activity, 2. GET streams, 3. GET recent activities, 4. PUT streams
+    // 1. GET activity, 2. GET streams, 3. GET intervals, 4. GET recent activities, 5. PUT streams
     const getMethods = fetchCalls.filter(c => c.method === 'GET');
     const putMethods = fetchCalls.filter(c => c.method === 'PUT');
-    expect(getMethods.length).toBeGreaterThanOrEqual(3);
+    expect(getMethods.length).toBeGreaterThanOrEqual(4);
     expect(putMethods.length).toBe(1);
+
+    // Intervals endpoint should have been called
+    expect(getMethods.some(c => c.url.includes('/intervals'))).toBe(true);
 
     // PUT should target the streams endpoint
     expect(putMethods[0].url).toContain('/streams');
@@ -273,6 +290,68 @@ describe('Webhook handler — full pipeline with mocked fetch (§5)', () => {
     expect(capturedAuthHeader).toMatch(/^Basic /);
     const decoded = Buffer.from(capturedAuthHeader.replace('Basic ', ''), 'base64').toString();
     expect(decoded).toBe('API_KEY:my_secret_key');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('uses API interval data when the /intervals endpoint returns valid intervals', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, opts?: any) => {
+      if (url.includes('/api/v1/activity/act_001/intervals')) {
+        return { ok: true, json: async () => mockIntervals };
+      }
+      if (url.includes('/activity/act_001') && !url.includes('/streams')) {
+        return { ok: true, json: async () => mockActivity };
+      }
+      if (url.includes('/streams') && (!opts?.method || opts.method === 'GET')) {
+        return { ok: true, json: async () => ({}) };
+      }
+      if (url.includes('/activities')) {
+        return { ok: true, json: async () => mockRecentActivities };
+      }
+      if (opts?.method === 'PUT') {
+        return { ok: true, json: async () => ({}) };
+      }
+      return { ok: false, json: async () => ({}) };
+    }));
+
+    const req = createMockReq('POST', { id: 'act_001', athleteId: 'i12345', apiKey: 'test_key' });
+    const res = createMockRes();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    // mockIntervals has 2 WORK intervals (REST is filtered out) → intervals count = 2
+    expect(res.body.intervals).toBe(2);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back to velocity stream parsing when /intervals returns non-array', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, opts?: any) => {
+      if (url.includes('/api/v1/activity/act_001/intervals')) {
+        return { ok: true, json: async () => ({ error: 'no intervals' }) };
+      }
+      if (url.includes('/activity/act_001') && !url.includes('/streams')) {
+        return { ok: true, json: async () => mockActivity };
+      }
+      if (url.includes('/streams') && (!opts?.method || opts.method === 'GET')) {
+        return { ok: true, json: async () => ({ velocity_smooth: { data: mockActivity.velocity_smooth } }) };
+      }
+      if (url.includes('/activities')) {
+        return { ok: true, json: async () => mockRecentActivities };
+      }
+      if (opts?.method === 'PUT') {
+        return { ok: true, json: async () => ({}) };
+      }
+      return { ok: false, json: async () => ({}) };
+    }));
+
+    const req = createMockReq('POST', { id: 'act_001', athleteId: 'i12345', apiKey: 'test_key' });
+    const res = createMockRes();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    // Falls back to velocity stream parsing — should still report a number
+    expect(typeof res.body.intervals).toBe('number');
 
     vi.unstubAllGlobals();
   });

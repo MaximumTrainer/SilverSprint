@@ -38,6 +38,30 @@ export const IntervalsEventSchema = z.object({
 
 export type IntervalsEvent = z.infer<typeof IntervalsEventSchema>;
 
+/**
+ * Schema for a single interval entry from the Intervals.icu
+ * GET /api/v1/activity/{id}/intervals endpoint.
+ */
+export const IntervalsIntervalSchema = z.object({
+  label: z.string().optional(),
+  start_index: z.number().optional(),
+  end_index: z.number().optional(),
+  /** Distance in metres */
+  distance: z.number().optional(),
+  /** Total elapsed time in seconds */
+  elapsed_time: z.number().optional(),
+  /** Active moving time in seconds */
+  moving_time: z.number().optional(),
+  /** Average speed in m/s */
+  average_speed: z.number().optional(),
+  /** Peak speed in m/s */
+  max_speed: z.number().optional(),
+  /** Interval type e.g. "WORK", "REST", "ACTIVE_REST", "WARMUP", "COOLDOWN" */
+  type: z.string().optional(),
+});
+
+export type IntervalsInterval = z.infer<typeof IntervalsIntervalSchema>;
+
 export const IntervalsAthleteSchema = z.object({
   id: z.union([z.string(), z.number()]).transform(String),
   name: z.string().nullable().optional(),

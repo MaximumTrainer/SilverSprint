@@ -21,6 +21,8 @@ export class SprintParser {
   private static readonly MOVING_THRESHOLD = 1.0; // m/s — spec: V < 1 m/s is standing
   /** Minimum distance to count as a valid rep */
   private static readonly MIN_REP_DISTANCE = 10; // metres
+  /** Interval types from the Intervals.icu API that represent active sprint work */
+  private static readonly WORK_INTERVAL_TYPES = ['WORK', 'ACTIVE'] as const;
 
   /**
    * Parse a full session's velocity_smooth stream into classified intervals.
@@ -85,6 +87,45 @@ export class SprintParser {
     if (distance <= 80) return 'MaxVelocity';
     if (distance <= 150) return 'SpeedEndurance';
     return 'SpecialEndurance';
+  }
+
+  /**
+   * Convert a single interval from the Intervals.icu
+   * GET /api/v1/activity/{id}/intervals API response into a TrackInterval.
+   *
+   * Returns null if the interval lacks sufficient data (too short, no speed, etc.).
+   * Only WORK-type intervals (or intervals with no type) are included so that
+   * rest / warm-up segments are automatically excluded.
+   */
+  public static fromAPIInterval(interval: {
+    distance?: number;
+    elapsed_time?: number;
+    moving_time?: number;
+    average_speed?: number;
+    max_speed?: number;
+    type?: string;
+  }): TrackInterval | null {
+    // Exclude explicit non-work segments
+    if (interval.type && !(this.WORK_INTERVAL_TYPES as readonly string[]).includes(interval.type)) {
+      return null;
+    }
+
+    const distance = interval.distance ?? 0;
+    const duration = interval.moving_time ?? interval.elapsed_time ?? 0;
+    const vMax = interval.max_speed ?? 0;
+    const flyingVelocity = interval.average_speed ?? 0;
+
+    if (distance < this.MIN_REP_DISTANCE || duration <= 0 || vMax <= 0) {
+      return null;
+    }
+
+    return {
+      type: this.classifyType(distance),
+      distance: Math.round(distance),
+      vMax,
+      duration,
+      flyingVelocity,
+    };
   }
 
   /**
