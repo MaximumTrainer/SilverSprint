@@ -111,3 +111,142 @@ describe('SprintParser — Acceleration detection per spec (§3.1)', () => {
     }
   });
 });
+
+describe('SprintParser.fromAPIInterval — Intervals.icu /activity/{id}/intervals', () => {
+  it('converts a WORK interval with full data to a TrackInterval', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 80.0,
+      moving_time: 9,
+      max_speed: 9.8,
+      average_speed: 8.5,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('MaxVelocity');
+    expect(result!.distance).toBe(80);
+    expect(result!.vMax).toBe(9.8);
+    expect(result!.duration).toBe(9);
+    expect(result!.flyingVelocity).toBe(8.5);
+  });
+
+  it('classifies distances correctly from API data', () => {
+    const accel = SprintParser.fromAPIInterval({ type: 'WORK', distance: 30, moving_time: 4, max_speed: 9 });
+    expect(accel!.type).toBe('Acceleration');
+
+    const maxVel = SprintParser.fromAPIInterval({ type: 'WORK', distance: 60, moving_time: 7, max_speed: 9 });
+    expect(maxVel!.type).toBe('MaxVelocity');
+
+    const se = SprintParser.fromAPIInterval({ type: 'WORK', distance: 100, moving_time: 12, max_speed: 9 });
+    expect(se!.type).toBe('SpeedEndurance');
+
+    const specialEnd = SprintParser.fromAPIInterval({ type: 'WORK', distance: 200, moving_time: 24, max_speed: 9 });
+    expect(specialEnd!.type).toBe('SpecialEndurance');
+  });
+
+  it('uses elapsed_time as fallback when moving_time is absent', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 30,
+      elapsed_time: 4,
+      max_speed: 9.0,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.duration).toBe(4);
+  });
+
+  it('excludes REST intervals', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'REST',
+      distance: 50,
+      moving_time: 60,
+      max_speed: 1.5,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('excludes WARMUP intervals', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WARMUP',
+      distance: 200,
+      moving_time: 120,
+      max_speed: 4.0,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('excludes COOLDOWN intervals', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'COOLDOWN',
+      distance: 200,
+      moving_time: 120,
+      max_speed: 3.5,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('includes intervals with no type (unstructured activity)', () => {
+    const result = SprintParser.fromAPIInterval({
+      distance: 60,
+      moving_time: 7,
+      max_speed: 9.2,
+      average_speed: 8.6,
+    });
+    expect(result).not.toBeNull();
+  });
+
+  it('includes ACTIVE intervals', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'ACTIVE',
+      distance: 50,
+      moving_time: 6,
+      max_speed: 8.5,
+    });
+    expect(result).not.toBeNull();
+  });
+
+  it('returns null when distance is below minimum rep distance', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 5,
+      moving_time: 1,
+      max_speed: 9.0,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('returns null when max_speed is zero', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 40,
+      moving_time: 5,
+      max_speed: 0,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('returns null when duration is zero', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 30,
+      moving_time: 0,
+      max_speed: 9.0,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('returns null for empty interval object', () => {
+    const result = SprintParser.fromAPIInterval({});
+    expect(result).toBeNull();
+  });
+
+  it('flyingVelocity defaults to 0 when average_speed is absent', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 30,
+      moving_time: 4,
+      max_speed: 9.0,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.flyingVelocity).toBe(0);
+  });
+});

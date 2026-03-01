@@ -3,7 +3,7 @@ import { SprintParser, TrackInterval } from '../domain/sprint/parser';
 import { SilverSprintLogic, HRVData, NFIStatus } from '../domain/sprint/core';
 import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../domain/sprint/race-estimator';
 import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sprint/race-plan';
-import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsEventSchema, IntervalsAthleteSchema, IntervalsActivity, IntervalsWellness, IntervalsEvent } from '../domain/schema';
+import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsEventSchema, IntervalsAthleteSchema, IntervalsIntervalSchema, IntervalsActivity, IntervalsWellness, IntervalsEvent } from '../domain/schema';
 import { clientLogger } from '../logger';
 import type { DailyDataPoint } from '../domain/types';
 import { INTERVALS_BASE } from '../config/api';
@@ -190,9 +190,41 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         // 8. Race estimates based on best Vmax + training interval history
         const bestVmax60d = activities.reduce((best, a) => Math.max(best, a.max_speed), 0);
 
-        // Parse intervals from ALL activities for training profile
-        const allTrainingIntervals = activities.flatMap((a) => SprintParser.parseTrackSession(a));
-        clientLogger.info(`Parsed ${allTrainingIntervals.length} training intervals from ${activities.length} activities`, athleteId);
+        // Fetch structured interval data from the Intervals.icu API for each activity.
+        // The /intervals endpoint provides accurate rep-level data (distance, max_speed,
+        // moving_time) that is not present in the activity list response.
+        // We limit to 20 most-recent activities to keep the number of parallel calls reasonable.
+        const activitiesForIntervals = activities.slice(0, 20);
+        const intervalFetches = await Promise.allSettled(
+          activitiesForIntervals.map(async (a) => {
+            const res = await fetch(
+              `${INTERVALS_BASE}/api/v1/activity/${a.id}/intervals`,
+              { headers }
+            );
+            if (!res.ok) return [];
+            const raw = await res.json();
+            if (!Array.isArray(raw)) return [];
+            return raw
+              .map((i: unknown) => {
+                const parsed = IntervalsIntervalSchema.safeParse(i);
+                if (!parsed.success) return null;
+                return SprintParser.fromAPIInterval(parsed.data);
+              })
+              .filter((i): i is TrackInterval => i !== null);
+          })
+        );
+
+        // Merge: for each activity use API intervals when available, else fall back
+        // to parsing the velocity_smooth stream (which may be empty from the list API).
+        const allTrainingIntervals = activitiesForIntervals.flatMap((a, idx) => {
+          const result = intervalFetches[idx];
+          if (result.status === 'fulfilled' && result.value.length > 0) {
+            return result.value;
+          }
+          return SprintParser.parseTrackSession(a);
+        });
+
+        clientLogger.info(`Parsed ${allTrainingIntervals.length} training intervals from ${activitiesForIntervals.length} activities (of ${activities.length} total)`, athleteId);
 
         const raceInput: RaceEstimatorInput = {
           bestVmax60d,
