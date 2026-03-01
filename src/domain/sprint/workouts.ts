@@ -263,24 +263,97 @@ export class SprintWorkoutGenerator {
     volume: string,
   ): string {
     const statusLabel = status === 'green' ? '🟢 GREEN' : status === 'amber' ? '🟡 AMBER' : '🔴 RED';
-    const lines: string[] = [
-      `🏃 SilverSprint Recommended Session`,
-      `Status: ${statusLabel} (NFI: ${(nfi * 100).toFixed(1)}%)`,
-      '',
-      'WARM-UP',
-      ...warmup.map((w) => `• ${w}`),
-      '',
-      'MAIN SET',
-      ...mainSet.map(
-        (b) =>
-          `• ${b.reps}× ${b.name} — ${b.distance} @ ${b.intensity} | Rest: ${b.rest}\n  → ${b.cue}`,
-      ),
-      '',
-      'COOL-DOWN',
-      ...cooldown.map((c) => `• ${c}`),
-      '',
-      `Total Sprint Volume: ${volume}`,
-    ];
+    const lines: string[] = [];
+
+    lines.push(`🏃 SilverSprint — ${statusLabel} (NFI: ${(nfi * 100).toFixed(1)}%)`);
+    lines.push('');
+
+    lines.push('Warmup');
+    for (const item of warmup) {
+      lines.push(`- ${item}`);
+    }
+    lines.push('');
+
+    for (const block of mainSet) {
+      const stepLine = this.toIcuStep(block.distance, block.intensity);
+      const restLine = this.toIcuRest(block.rest);
+      const header = block.reps > 1 ? `${block.name} ${block.reps}x` : block.name;
+      lines.push(header);
+      lines.push(`- ${stepLine}`);
+      if (restLine) {
+        lines.push(`- ${restLine}`);
+      }
+      lines.push('');
+    }
+
+    lines.push('Cooldown');
+    for (const item of cooldown) {
+      lines.push(`- ${item}`);
+    }
+    lines.push('');
+    lines.push(`Total sprint volume: ${volume}`);
+
     return lines.join('\n');
+  }
+
+  /** Convert a sprint block distance string to an intervals.icu step segment.
+   *  Examples: "30m" → "0.030km 100% pace", "10 min total" → "10m Z1 Pace"
+   */
+  private static toIcuStep(distanceStr: string, intensityStr: string): string {
+    const intensity = this.toIcuIntensity(intensityStr);
+
+    // Time-range: "15–20 min" → take upper bound → "20m"
+    const rangeMinMatch = distanceStr.match(/(\d+)[–\-](\d+)\s*min/i);
+    if (rangeMinMatch) return `${rangeMinMatch[2]}m ${intensity}`;
+
+    // Plain time: "10 min total", "10 min" → "10m"
+    const minMatch = distanceStr.match(/(\d+)\s*min/i);
+    if (minMatch) return `${minMatch[1]}m ${intensity}`;
+
+    // Distance in meters: "30m", "20m (mini-hurdle spacing)", "60m from blocks"
+    const meterMatch = distanceStr.match(/^(\d+(?:\.\d+)?)\s*m\b/i);
+    if (meterMatch) {
+      const km = parseFloat(meterMatch[1]) / 1000;
+      return `${km.toFixed(3)}km ${intensity}`;
+    }
+
+    return `${distanceStr} ${intensity}`;
+  }
+
+  /** Convert intensity string to intervals.icu pace notation. */
+  private static toIcuIntensity(intensityStr: string): string {
+    // Range with en-dash or hyphen: "90–95%", "95–100%", "90-95%"
+    const rangeMatch = intensityStr.match(/^(\d+)[–\-](\d+)%$/);
+    if (rangeMatch) return `${rangeMatch[1]}-${rangeMatch[2]}% pace`;
+
+    // Single percentage: "100%", "90%"
+    const pctMatch = intensityStr.match(/^(\d+)%$/);
+    if (pctMatch) return `${pctMatch[1]}% pace`;
+
+    if (/^(controlled|technical)$/i.test(intensityStr)) return 'Z3 Pace';
+    if (/^very low$/i.test(intensityStr)) return 'Z1 Pace';
+    if (/^low$/i.test(intensityStr)) return 'Z2 Pace';
+
+    // Unrecognised intensity — default to moderate aerobic effort
+    return 'Z2 Pace';
+  }
+
+  /** Convert a rest string to an intervals.icu recovery step, or '' if no rest. */
+  private static toIcuRest(restStr: string): string {
+    if (!restStr || restStr === 'N/A' || /^continuous$/i.test(restStr)) return '';
+
+    // "3–4 min walk" → "4m Z1 Pace" (use upper bound)
+    const rangeMinMatch = restStr.match(/(\d+)[–\-](\d+)\s*min/i);
+    if (rangeMinMatch) return `${rangeMinMatch[2]}m Z1 Pace`;
+
+    // "4 min walk-back", "3 min walk" → "4m Z1 Pace"
+    const minMatch = restStr.match(/(\d+)\s*min/i);
+    if (minMatch) return `${minMatch[1]}m Z1 Pace`;
+
+    // "90s walk-back" → "90s Z1 Pace"
+    const secMatch = restStr.match(/(\d+)s\b/i);
+    if (secMatch) return `${secMatch[1]}s Z1 Pace`;
+
+    return '';
   }
 }
