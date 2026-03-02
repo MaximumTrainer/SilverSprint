@@ -172,17 +172,14 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
 
         const hrvData: HRVData = { currentHRV, avgHRV7d };
 
-        // 6. Calculate TSB and Strength Zone (§3.3) — must come before SRS
+        // 6. Calculate TSB and Strength Zone (§3.3).
+        // This raw activity-level TSB is used for the strength prescription,
+        // race estimation, and UI display.  Recovery uses recoveryTSB (below),
+        // which is further adjusted with interval-level training load data.
         const latestATL = latestSession?.icu_atl || 0;
         const latestCTL = latestSession?.icu_ctl || 0;
         const tsb = latestCTL - latestATL;
         const strengthRx = SilverSprintLogic.getStrengthPrescription(tsb);
-
-        const currentSRS = SilverSprintLogic.calculateSRS(hrvData, tsb, currentNFI);
-        const smartRecovery = SilverSprintLogic.getSmartRecoveryWindow(athleteAge, hrvData, tsb, currentNFI);
-        const recoveryHours = smartRecovery.hours;
-        const adjustedSRS = smartRecovery.srs;
-        const staleVmax = smartRecovery.staleVmax;
 
         // 7. Build 60-day time series for charts
         const dailyTimeSeries = buildDailyTimeSeries(activities, wellnessEntries, avgVmax, avgHRV7d, athleteAge);
@@ -201,16 +198,23 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
               `${INTERVALS_BASE}/api/v1/activity/${a.id}/intervals`,
               { headers }
             );
-            if (!res.ok) return [];
+            if (!res.ok) return { intervals: [] as TrackInterval[], totalLoad: 0 };
             const raw = await res.json();
-            if (!Array.isArray(raw)) return [];
-            return raw
-              .map((i: unknown) => {
-                const parsed = IntervalsIntervalSchema.safeParse(i);
-                if (!parsed.success) return null;
-                return SprintParser.fromAPIInterval(parsed.data);
-              })
-              .filter((i): i is TrackInterval => i !== null);
+            if (!Array.isArray(raw)) return { intervals: [] as TrackInterval[], totalLoad: 0 };
+
+            let totalLoad = 0;
+            const intervals: TrackInterval[] = [];
+            for (const item of raw) {
+              const parsed = IntervalsIntervalSchema.safeParse(item);
+              if (!parsed.success) continue;
+              // Sum icu_training_load from ALL interval types (not just WORK/ACTIVE)
+              // so that non-sprint load (warmup, cooldown, rest) feeds into recovery.
+              totalLoad += parsed.data.icu_training_load ?? 0;
+              const interval = SprintParser.fromAPIInterval(parsed.data);
+              if (interval) intervals.push(interval);
+            }
+
+            return { intervals, totalLoad };
           })
         );
 
@@ -218,13 +222,33 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         // to parsing the velocity_smooth stream (which may be empty from the list API).
         const allTrainingIntervals = activitiesForIntervals.flatMap((a, idx) => {
           const result = intervalFetches[idx];
-          if (result.status === 'fulfilled' && result.value.length > 0) {
-            return result.value;
+          if (result.status === 'fulfilled' && result.value.intervals.length > 0) {
+            return result.value.intervals;
           }
           return SprintParser.parseTrackSession(a);
         });
 
-        clientLogger.info(`Parsed ${allTrainingIntervals.length} training intervals from ${activitiesForIntervals.length} activities (of ${activities.length} total)`, athleteId);
+        // Aggregate total training load from ALL interval types across recent sessions.
+        // This captures non-sprint load (warmup, cooldown, rest) that would otherwise
+        // be ignored by the WORK/ACTIVE-only filter used for race estimation.
+        const totalIntervalLoad = intervalFetches
+          .filter((r): r is PromiseFulfilledResult<{ intervals: TrackInterval[]; totalLoad: number }> => r.status === 'fulfilled')
+          .reduce((sum, r) => sum + r.value.totalLoad, 0);
+
+        clientLogger.info(`Parsed ${allTrainingIntervals.length} training intervals from ${activitiesForIntervals.length} activities (of ${activities.length} total), totalIntervalLoad=${totalIntervalLoad}`, athleteId);
+
+        // Compute a TSB that also reflects non-sprint interval training load.
+        const recoveryTSB = SilverSprintLogic.computeIntervalAdjustedTSB(
+          latestCTL,
+          latestATL,
+          totalIntervalLoad,
+          activitiesForIntervals.length,
+        );
+
+        const smartRecovery = SilverSprintLogic.getSmartRecoveryWindow(athleteAge, hrvData, recoveryTSB, currentNFI);
+        const recoveryHours = smartRecovery.hours;
+        const adjustedSRS = smartRecovery.srs;
+        const staleVmax = smartRecovery.staleVmax;
 
         const raceInput: RaceEstimatorInput = {
           bestVmax60d,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { IntervalsActivitySchema, IntervalsWellnessSchema } from '../../src/domain/schema';
+import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsIntervalSchema } from '../../src/domain/schema';
 
 /**
  * Tests for README §2.2 — Data Ingestion Schema (Zod)
@@ -83,5 +83,51 @@ describe('IntervalsWellnessSchema', () => {
       readiness: 85,
     });
     expect(result.success).toBe(true);
+  });
+});
+
+/**
+ * IntervalsIntervalSchema — interval-level training load field.
+ *
+ * icu_training_load is optional because not all versions of the
+ * Intervals.icu API include it, but when present it is used to
+ * account for all other (non-sprint) training load in recovery.
+ */
+describe('IntervalsIntervalSchema — icu_training_load', () => {
+  it('accepts an interval with icu_training_load', () => {
+    const result = IntervalsIntervalSchema.safeParse({
+      type: 'WARMUP',
+      distance: 800,
+      elapsed_time: 240,
+      moving_time: 240,
+      average_speed: 3.3,
+      max_speed: 4.0,
+      icu_training_load: 12,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.icu_training_load).toBe(12);
+    }
+  });
+
+  it('accepts an interval without icu_training_load (field is optional)', () => {
+    const result = IntervalsIntervalSchema.safeParse({
+      type: 'WORK',
+      distance: 60,
+      moving_time: 7,
+      max_speed: 9.8,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.icu_training_load).toBeUndefined();
+    }
+  });
+
+  it('icu_training_load defaults to undefined when absent (no default)', () => {
+    const result = IntervalsIntervalSchema.safeParse({ type: 'REST' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.icu_training_load).toBeUndefined();
+    }
   });
 });

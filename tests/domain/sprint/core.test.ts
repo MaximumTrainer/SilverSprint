@@ -268,3 +268,51 @@ describe('SilverSprintLogic.getNFIStatus — Traffic Light (§4)', () => {
     expect(SilverSprintLogic.getNFIStatus(0.80)).toBe('red');
   });
 });
+
+/**
+ * Interval-adjusted TSB — accounts for all other training load from intervals.
+ *
+ * When interval-level icu_training_load is available for all interval types
+ * (including WARMUP, COOLDOWN, REST), the interval-derived ATL may exceed the
+ * activity-level ATL.  In that case the higher value is used so that non-sprint
+ * training load is not underestimated in recovery.
+ */
+describe('SilverSprintLogic.computeIntervalAdjustedTSB', () => {
+  it('returns standard TSB when no interval data is available (totalIntervalLoad = 0)', () => {
+    // TSB = 42 - 55 = -13
+    expect(SilverSprintLogic.computeIntervalAdjustedTSB(42, 55, 0, 10)).toBe(-13);
+  });
+
+  it('returns standard TSB when sessionCount is zero', () => {
+    expect(SilverSprintLogic.computeIntervalAdjustedTSB(42, 55, 1400, 0)).toBe(-13);
+  });
+
+  it('returns standard TSB when interval-derived ATL is lower than activity ATL', () => {
+    // avgIntervalLoad = 200 / 10 = 20, which is less than atl = 55 → no adjustment
+    expect(SilverSprintLogic.computeIntervalAdjustedTSB(42, 55, 200, 10)).toBe(-13);
+  });
+
+  it('returns a lower (more conservative) TSB when interval-derived ATL exceeds activity ATL', () => {
+    // avgIntervalLoad = 2000 / 20 = 100, which exceeds atl = 55
+    // effectiveATL = 100 → TSB = 42 - 100 = -58
+    expect(SilverSprintLogic.computeIntervalAdjustedTSB(42, 55, 2000, 20)).toBe(-58);
+  });
+
+  it('uses the interval-derived ATL directly when it exceeds the activity ATL', () => {
+    // avgIntervalLoad = 1200 / 20 = 60; atl = 42
+    // effectiveATL = max(42, 60) = 60 → TSB = 80 - 60 = 20
+    expect(SilverSprintLogic.computeIntervalAdjustedTSB(80, 42, 1200, 20)).toBe(20);
+  });
+
+  it('produces a more conservative recovery when interval load is high', () => {
+    const standardTSB = SilverSprintLogic.computeIntervalAdjustedTSB(42, 55, 0, 10);
+    const adjustedTSB = SilverSprintLogic.computeIntervalAdjustedTSB(42, 55, 2000, 10);
+    // High interval load should yield lower TSB (more conservative / more recovery needed)
+    expect(adjustedTSB).toBeLessThan(standardTSB);
+  });
+
+  it('result is identical to standard TSB when session interval loads equal activity ATL', () => {
+    // avgIntervalLoad = 55*10 / 10 = 55 = atl → no adjustment
+    expect(SilverSprintLogic.computeIntervalAdjustedTSB(42, 55, 550, 10)).toBe(-13);
+  });
+});
