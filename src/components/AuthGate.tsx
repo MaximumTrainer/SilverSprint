@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Zap } from 'lucide-react';
 import { clientLogger } from '../logger';
+import { INTERVALS_BASE } from '../config/api';
 
 interface AuthCredentials {
   athleteId: string;
@@ -16,7 +17,7 @@ async function validateWithIntervals(credentials: AuthCredentials): Promise<bool
     clientLogger.info('Validating credentials with Intervals.icu', credentials.athleteId);
     const authHeader = btoa(`API_KEY:${credentials.apiKey}`);
     const res = await fetch(
-      `/intervals/api/v1/athlete/${credentials.athleteId}/profile`,
+      `${INTERVALS_BASE}/api/v1/athlete/${credentials.athleteId}/profile`,
       { headers: { Authorization: `Basic ${authHeader}` } }
     );
     if (res.ok) {
