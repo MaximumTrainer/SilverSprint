@@ -15,7 +15,7 @@ export type { DailyDataPoint };
 
 interface TimeSeriesChartProps {
   data: DailyDataPoint[];
-  dataKey: 'nfi' | 'tsb' | 'recoveryHours';
+  dataKey: 'nfi' | 'tsb' | 'recoveryHours' | 'hrv';
   title: string;
   color: string;
   /** Optional reference line value */
@@ -28,6 +28,7 @@ const defaultFormatters: Record<string, (v: number) => string> = {
   nfi: (v) => `${(v * 100).toFixed(1)}%`,
   tsb: (v) => v.toFixed(0),
   recoveryHours: (v) => `${v}h`,
+  hrv: (v) => `${v.toFixed(0)} ms`,
 };
 
 interface CustomTooltipProps {
