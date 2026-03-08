@@ -84,6 +84,45 @@ describe('IntervalsWellnessSchema', () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it('accepts rmssd field from wellness-ext endpoint', () => {
+    const result = IntervalsWellnessSchema.safeParse({
+      id: '2024-03-01',
+      rmssd: 46.5,
+      restingHR: 52,
+      weight: 82.0,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.rmssd).toBe(46.5);
+    }
+  });
+
+  it('accepts both hrv and rmssd together (wellness-ext extended response)', () => {
+    const result = IntervalsWellnessSchema.safeParse({
+      id: '2024-03-01',
+      hrv: 62,
+      rmssd: 46.5,
+      restingHR: 52,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hrv).toBe(62);
+      expect(result.data.rmssd).toBe(46.5);
+    }
+  });
+
+  it('succeeds when neither hrv nor rmssd are present (both optional)', () => {
+    const result = IntervalsWellnessSchema.safeParse({
+      id: '2024-03-01',
+      restingHR: 52,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hrv).toBeUndefined();
+      expect(result.data.rmssd).toBeUndefined();
+    }
+  });
 });
 
 /**

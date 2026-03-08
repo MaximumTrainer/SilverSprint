@@ -16,7 +16,10 @@ export type IntervalsActivity = z.infer<typeof IntervalsActivitySchema>;
 export const IntervalsWellnessSchema = z.object({
   id: z.string(),
   date: z.string().optional(),
+  /** HRV value in ms (standard wellness endpoint field) */
   hrv: z.number().optional(),
+  /** RMSSD in ms — the HRV field returned by the wellness-ext endpoint */
+  rmssd: z.number().optional(),
   restingHR: z.number().optional(),
   readiness: z.number().optional(),
   weight: z.number().optional(),

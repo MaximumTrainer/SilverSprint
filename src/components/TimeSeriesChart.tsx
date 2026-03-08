@@ -24,7 +24,7 @@ interface TimeSeriesChartProps {
   formatValue?: (value: number) => string;
 }
 
-const defaultFormatters: Record<string, (v: number) => string> = {
+const defaultFormatters: Record<TimeSeriesChartProps['dataKey'], (v: number) => string> = {
   nfi: (v) => `${(v * 100).toFixed(1)}%`,
   tsb: (v) => v.toFixed(0),
   recoveryHours: (v) => `${v}h`,
@@ -35,7 +35,7 @@ interface CustomTooltipProps {
   active?: boolean;
   payload?: Array<{ value: number | null; color: string }>;
   label?: string;
-  dataKey: string;
+  dataKey: TimeSeriesChartProps['dataKey'];
   formatValue?: (v: number) => string;
 }
 
