@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Zap } from 'lucide-react';
 import { clientLogger } from '../logger';
 import { INTERVALS_BASE } from '../config/api';
+import { persistLogin } from '../lib/auth-storage';
 
 interface AuthCredentials {
   athleteId: string;
@@ -37,6 +38,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onLogin }) => {
     athleteId: (import.meta.env.DEV && import.meta.env.INTERVALS_ATHLETE_ID) || '',
     apiKey: (import.meta.env.DEV && import.meta.env.INTERVALS_API_KEY) || '',
   });
+  const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,6 +49,9 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onLogin }) => {
     setLoading(false);
     if (isValid) {
       sessionStorage.setItem('silver_sprint_auth', JSON.stringify(credentials));
+      if (rememberMe) {
+        await persistLogin(credentials);
+      }
       onLogin(credentials);
     } else {
       setError('Invalid credentials. Check your Athlete ID and API Key.');
@@ -95,10 +100,30 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onLogin }) => {
           type="password"
           placeholder="Intervals.icu API key"
           className="icu-input"
-          style={{ width: '100%', marginBottom: 20, boxSizing: 'border-box' }}
+          style={{ width: '100%', marginBottom: 16, boxSizing: 'border-box' }}
           value={credentials.apiKey}
           onChange={(e) => setCredentials({ ...credentials, apiKey: e.target.value })}
         />
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 20,
+            cursor: 'pointer',
+            fontSize: 12,
+            color: 'var(--icu-text-secondary)',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+            style={{ accentColor: 'var(--icu-primary)', width: 14, height: 14 }}
+          />
+          Remember me
+        </label>
 
         <button
           onClick={handleAuth}
