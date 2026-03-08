@@ -389,6 +389,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
             color="var(--icu-primary)"
             formatValue={(v) => `${v}h`}
           />
+          {dailyTimeSeries.some((d) => d.hrv != null) && (
+            <TimeSeriesChart
+              data={dailyTimeSeries}
+              dataKey="hrv"
+              title="HRV Trend (60d)"
+              color="var(--icu-blue, #5b9bd5)"
+            />
+          )}
         </div>
 
         {/* ── Sprint Race Prep Row (shown only when sprint races are scheduled) ── */}

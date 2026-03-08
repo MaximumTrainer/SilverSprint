@@ -429,7 +429,7 @@ function buildDailyTimeSeries(
     const smartRec = SilverSprintLogic.getSmartRecoveryWindow(age, dayHrvData, dayTsb, dayNfi);
     const recoveryHours = smartRec.hours;
 
-    series.push({ date: dateStr, dayLabel, nfi, tsb, recoveryHours });
+    series.push({ date: dateStr, dayLabel, nfi, tsb, recoveryHours, hrv: hrv ?? null });
   }
 
   return series;

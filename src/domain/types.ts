@@ -28,4 +28,6 @@ export interface DailyDataPoint {
   nfi: number | null;
   tsb: number | null;
   recoveryHours: number | null;
+  /** Raw HRV value (ms) from wellness data, null when no wellness entry exists */
+  hrv: number | null;
 }
