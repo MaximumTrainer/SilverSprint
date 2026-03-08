@@ -279,9 +279,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <button
             onClick={onLogout}
             className="icu-btn-ghost"
-            style={{ padding: '4px 8px', fontSize: 12 }}
+            style={{ padding: '4px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}
           >
             <LogOut size={14} />
+            Log out
           </button>
         </div>
       </header>
