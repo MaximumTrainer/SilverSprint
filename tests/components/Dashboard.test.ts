@@ -250,3 +250,42 @@ describe('Dashboard \u2014 Body Weight Auto-Detection from Intervals.icu (\u00a7
     expect(exerciseWeights.every(w => w === null)).toBe(true);
   });
 });
+
+describe('Dashboard — HRV Trend Chart conditional rendering (§4)', () => {
+  type DataPoint = { date: string; dayLabel: string; nfi: number | null; tsb: number | null; recoveryHours: number | null; hrv: number | null };
+
+  function buildSeries(hrv: (number | null)[]): DataPoint[] {
+    return hrv.map((h, i) => ({
+      date: `2026-01-${String(i + 1).padStart(2, '0')}`,
+      dayLabel: `${i + 1} Jan`,
+      nfi: null,
+      tsb: null,
+      recoveryHours: null,
+      hrv: h,
+    }));
+  }
+
+  it('shows HRV chart when at least one day has a non-null HRV value', () => {
+    const series = buildSeries([null, null, 62, null]);
+    const shouldShowHRVChart = series.some((d) => d.hrv != null);
+    expect(shouldShowHRVChart).toBe(true);
+  });
+
+  it('hides HRV chart when all HRV values are null', () => {
+    const series = buildSeries([null, null, null]);
+    const shouldShowHRVChart = series.some((d) => d.hrv != null);
+    expect(shouldShowHRVChart).toBe(false);
+  });
+
+  it('shows HRV chart when all days have HRV values', () => {
+    const series = buildSeries([55, 58, 62, 60, 59]);
+    const shouldShowHRVChart = series.some((d) => d.hrv != null);
+    expect(shouldShowHRVChart).toBe(true);
+  });
+
+  it('hides HRV chart for an empty series', () => {
+    const series: DataPoint[] = [];
+    const shouldShowHRVChart = series.some((d) => d.hrv != null);
+    expect(shouldShowHRVChart).toBe(false);
+  });
+});

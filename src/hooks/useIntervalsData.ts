@@ -82,7 +82,7 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         const [profileRes, activitiesRes, wellnessRes] = await Promise.all([
           fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}`, { headers }),
           fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/activities?oldest=${oldest}&newest=${newest}`, { headers }),
-          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/wellness?oldest=${oldest}&newest=${newest}`, { headers }),
+          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/wellness-ext?oldest=${oldest}&newest=${newest}`, { headers }),
         ]);
 
         // 0. Process athlete profile for age & weight
@@ -121,9 +121,9 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
           .filter((r: { success: boolean }) => r.success)
           .map((r: { success: true; data: IntervalsActivity }) => r.data);
 
-        // 2. Process Wellness (HRV/Readiness)
+        // 2. Process Wellness (HRV/Readiness) from wellness-ext endpoint
         if (!wellnessRes.ok) {
-          clientLogger.warn(`Wellness fetch failed — HTTP ${wellnessRes.status}`, athleteId);
+          clientLogger.warn(`Wellness-ext fetch failed — HTTP ${wellnessRes.status}`, athleteId);
         }
         const rawWellness = wellnessRes.ok ? await wellnessRes.json() : [];
         const wellnessEntries: IntervalsWellness[] = Array.isArray(rawWellness)
@@ -161,10 +161,13 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         const nfiStatus = SilverSprintLogic.getNFIStatus(currentNFI);
 
         // 5. Calculate HRV-based recovery (§3.2)
-        const currentHRV = latestWellness?.hrv || DEFAULT_HRV;
+        // wellness-ext returns rmssd as the primary HRV field; fall back to hrv for compatibility
+        const extractHRV = (w: { rmssd?: number; hrv?: number }): number | undefined =>
+          w.rmssd ?? w.hrv;
+        const currentHRV = extractHRV(latestWellness ?? {}) || DEFAULT_HRV;
         const recentHRVs = wellnessEntries
           .slice(0, 7)
-          .map((w) => w.hrv)
+          .map((w) => extractHRV(w))
           .filter((h): h is number => typeof h === 'number' && h > 0);
         const avgHRV7d = recentHRVs.length > 0
           ? recentHRVs.reduce((a, b) => a + b, 0) / recentHRVs.length
@@ -375,7 +378,7 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
  */
 function buildDailyTimeSeries(
   activities: IntervalsActivity[],
-  wellnessEntries: Array<{ id: string; date?: string; hrv?: number }>,
+  wellnessEntries: Array<{ id: string; date?: string; hrv?: number; rmssd?: number }>,
   avgVmax: number,
   avgHRV7d: number,
   age: number,
@@ -387,14 +390,16 @@ function buildDailyTimeSeries(
     if (dateStr && !actByDate.has(dateStr)) actByDate.set(dateStr, act);
   }
 
-  // Build HRV map and a date-sorted array for per-day rolling window
+  // Build HRV map and a date-sorted array for per-day rolling window.
+  // Prefer rmssd (wellness-ext field) over hrv for maximum accuracy.
   const wellByDate = new Map<string, number>();
   const hrvTimeline: Array<{ date: string; hrv: number }> = [];
   for (const w of wellnessEntries) {
     const dateStr = w.date || w.id;
-    if (dateStr && w.hrv && w.hrv > 0 && !wellByDate.has(dateStr)) {
-      wellByDate.set(dateStr, w.hrv);
-      hrvTimeline.push({ date: dateStr, hrv: w.hrv });
+    const hrvValue = w.rmssd ?? w.hrv;
+    if (dateStr && hrvValue && hrvValue > 0 && !wellByDate.has(dateStr)) {
+      wellByDate.set(dateStr, hrvValue);
+      hrvTimeline.push({ date: dateStr, hrv: hrvValue });
     }
   }
   hrvTimeline.sort((a, b) => a.date.localeCompare(b.date));
