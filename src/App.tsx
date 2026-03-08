@@ -6,6 +6,7 @@ import { SprintWorkout } from './domain/sprint/workouts';
 import { clientLogger } from './logger';
 import { AlertCircle, Zap } from 'lucide-react';
 import { INTERVALS_BASE } from './config/api';
+import { loadPersistedLogin, clearAuthCookie } from './lib/auth-storage';
 
 const App: React.FC = () => {
   const [auth, setAuth] = useState<{ athleteId: string; apiKey: string } | null>(null);
@@ -13,27 +14,40 @@ const App: React.FC = () => {
 
   // 1. Check for existing session on mount (dev env vars take priority)
   useEffect(() => {
-    const devAthleteId = import.meta.env.INTERVALS_ATHLETE_ID;
-    const devApiKey = import.meta.env.INTERVALS_API_KEY;
+    const initAuth = async () => {
+      const devAthleteId = import.meta.env.INTERVALS_ATHLETE_ID;
+      const devApiKey = import.meta.env.INTERVALS_API_KEY;
 
-    if (import.meta.env.DEV && devAthleteId && devApiKey) {
-      setAuth({ athleteId: devAthleteId, apiKey: devApiKey });
-    } else {
-      const savedAuth = sessionStorage.getItem('silver_sprint_auth');
-      if (savedAuth) {
-        try {
-          const parsed = JSON.parse(savedAuth);
-          if (parsed && typeof parsed.athleteId === 'string' && typeof parsed.apiKey === 'string') {
-            setAuth(parsed);
-          } else {
+      if (import.meta.env.DEV && devAthleteId && devApiKey) {
+        setAuth({ athleteId: devAthleteId, apiKey: devApiKey });
+      } else {
+        // 1a. Current-tab sessionStorage takes priority
+        const savedAuth = sessionStorage.getItem('silver_sprint_auth');
+        if (savedAuth) {
+          try {
+            const parsed = JSON.parse(savedAuth);
+            if (parsed && typeof parsed.athleteId === 'string' && typeof parsed.apiKey === 'string') {
+              setAuth(parsed);
+              setIsInitializing(false);
+              return;
+            } else {
+              sessionStorage.removeItem('silver_sprint_auth');
+            }
+          } catch {
             sessionStorage.removeItem('silver_sprint_auth');
           }
-        } catch {
-          sessionStorage.removeItem('silver_sprint_auth');
+        }
+        // 1b. Fall back to the persistent encrypted cookie (cross-session)
+        const persisted = await loadPersistedLogin();
+        if (persisted) {
+          sessionStorage.setItem('silver_sprint_auth', JSON.stringify(persisted));
+          setAuth(persisted);
         }
       }
-    }
-    setIsInitializing(false);
+      setIsInitializing(false);
+    };
+
+    initAuth();
   }, []);
 
   // 2. Fetch data using our custom hook
@@ -44,6 +58,7 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     sessionStorage.removeItem('silver_sprint_auth');
+    clearAuthCookie();
     // In dev mode, re-apply .env credentials instead of dropping to an empty auth gate
     const devAthleteId = import.meta.env.INTERVALS_ATHLETE_ID;
     const devApiKey = import.meta.env.INTERVALS_API_KEY;
