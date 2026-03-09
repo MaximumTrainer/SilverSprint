@@ -77,12 +77,14 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         // Fetch profile, activities, and wellness in parallel (they are independent)
         const oldest = getDateDaysAgo(LOOKBACK_DAYS);
         const newest = getDateDaysAgo(0);
+        // Wellness endpoint uses an inclusive date range: today − 59 days → today = 60 days
+        const wellnessOldest = getDateDaysAgo(LOOKBACK_DAYS - 1);
         clientLogger.info('Fetching profile, activities, and wellness in parallel', athleteId);
 
         const [profileRes, activitiesRes, wellnessRes] = await Promise.all([
           fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}`, { headers }),
           fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/activities?oldest=${oldest}&newest=${newest}`, { headers }),
-          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/wellness-ext?oldest=${oldest}&newest=${newest}`, { headers }),
+          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/wellness?oldest=${wellnessOldest}&newest=${newest}`, { headers }),
         ]);
 
         // 0. Process athlete profile for age & weight
@@ -121,9 +123,9 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
           .filter((r: { success: boolean }) => r.success)
           .map((r: { success: true; data: IntervalsActivity }) => r.data);
 
-        // 2. Process Wellness (HRV/Readiness) from wellness-ext endpoint
+        // 2. Process Wellness (HRV/Readiness) from wellness endpoint
         if (!wellnessRes.ok) {
-          clientLogger.warn(`Wellness-ext fetch failed — HTTP ${wellnessRes.status}`, athleteId);
+          clientLogger.warn(`Wellness fetch failed — HTTP ${wellnessRes.status}`, athleteId);
         }
         const rawWellness = wellnessRes.ok ? await wellnessRes.json() : [];
         const wellnessEntries: IntervalsWellness[] = Array.isArray(rawWellness)
@@ -161,9 +163,9 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         const nfiStatus = SilverSprintLogic.getNFIStatus(currentNFI);
 
         // 5. Calculate HRV-based recovery (§3.2)
-        // wellness-ext returns rmssd as the primary HRV field; fall back to hrv for compatibility
+        // wellness endpoint returns hrv as the primary HRV field; fall back to rmssd for compatibility
         const extractHRV = (w: { rmssd?: number; hrv?: number }): number | undefined =>
-          w.rmssd ?? w.hrv;
+          w.hrv ?? w.rmssd;
         const currentHRV = extractHRV(latestWellness ?? {}) || DEFAULT_HRV;
         const recentHRVs = wellnessEntries
           .slice(0, 7)
@@ -391,12 +393,12 @@ function buildDailyTimeSeries(
   }
 
   // Build HRV map and a date-sorted array for per-day rolling window.
-  // Prefer rmssd (wellness-ext field) over hrv for maximum accuracy.
+  // Prefer hrv (wellness endpoint field) over rmssd for maximum accuracy.
   const wellByDate = new Map<string, number>();
   const hrvTimeline: Array<{ date: string; hrv: number }> = [];
   for (const w of wellnessEntries) {
     const dateStr = w.date || w.id;
-    const hrvValue = w.rmssd ?? w.hrv;
+    const hrvValue = w.hrv ?? w.rmssd;
     if (dateStr && hrvValue && hrvValue > 0 && !wellByDate.has(dateStr)) {
       wellByDate.set(dateStr, hrvValue);
       hrvTimeline.push({ date: dateStr, hrv: hrvValue });
