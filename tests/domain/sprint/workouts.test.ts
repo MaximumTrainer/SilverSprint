@@ -209,4 +209,100 @@ describe('SprintWorkoutGenerator', () => {
       expect(workout.totalSprintVolume).toContain('0m');
     });
   });
+
+  describe('Intervals.icu workout text format', () => {
+    const green = SprintWorkoutGenerator.generate('green', 1.0);
+    const amber = SprintWorkoutGenerator.generate('amber', 0.96);
+    const red = SprintWorkoutGenerator.generate('red', 0.90);
+    const reactivation = SprintWorkoutGenerator.generate('red', 0.92, { tsb: 5 });
+
+    it('all workout descriptions contain a Main Set section header', () => {
+      for (const w of [green, amber, red, reactivation]) {
+        expect(w.workoutDescription).toContain('Main Set');
+      }
+    });
+
+    it('step lines do not use "pace" notation', () => {
+      const allStepLines = [green, amber, red, reactivation].flatMap((w) =>
+        w.workoutDescription.split('\n').filter((l) => l.startsWith('- '))
+      );
+      expect(allStepLines.length).toBeGreaterThan(0);
+      for (const line of allStepLines) {
+        expect(line.toLowerCase()).not.toContain('pace');
+      }
+    });
+
+    it('zone step lines use bare zone names (e.g., Z1 not Z1 Pace)', () => {
+      const allStepLines = [green, amber, red, reactivation].flatMap((w) =>
+        w.workoutDescription.split('\n').filter((l) => l.startsWith('- '))
+      );
+      for (const line of allStepLines) {
+        expect(line).not.toMatch(/Z\d\s+Pace/i);
+      }
+    });
+
+    it('step lines use time-based duration in seconds or minutes', () => {
+      const allStepLines = [green, amber, red, reactivation].flatMap((w) =>
+        w.workoutDescription.split('\n').filter((l) => l.startsWith('- '))
+      );
+      for (const line of allStepLines) {
+        // Each step must start with "- Xs " (seconds) or "- Xm " (minutes)
+        expect(line).toMatch(/^- \d+[sm] /);
+      }
+    });
+
+    it('step lines do not contain fractional km distances', () => {
+      const allStepLines = [green, amber, red, reactivation].flatMap((w) =>
+        w.workoutDescription.split('\n').filter((l) => l.startsWith('- '))
+      );
+      for (const line of allStepLines) {
+        expect(line).not.toMatch(/\d+\.\d+km/);
+      }
+    });
+
+    it('repeat counts (Nx) appear on their own line, not appended to block name', () => {
+      // Green workout has blocks with 3 reps and 2 reps
+      expect(green.workoutDescription).not.toContain('Block Starts 3x');
+      expect(green.workoutDescription).not.toContain('Flying 30s 3x');
+      expect(green.workoutDescription).not.toContain('Full 60m 2x');
+      // The Nx notation must be on its own line
+      expect(green.workoutDescription).toMatch(/^3x$/m);
+      expect(green.workoutDescription).toMatch(/^2x$/m);
+    });
+
+    it('blocks with a single rep do not generate a 1x line', () => {
+      // Red workout has Active Recovery Walk with reps=1
+      expect(red.workoutDescription).not.toMatch(/^1x$/m);
+    });
+
+    it('warmup and cooldown items are plain text labels without step prefix', () => {
+      const descLines = green.workoutDescription.split('\n');
+      const warmupStart = descLines.indexOf('Warmup');
+      const mainSetStart = descLines.indexOf('Main Set');
+      expect(warmupStart).toBeGreaterThanOrEqual(0);
+      expect(mainSetStart).toBeGreaterThan(warmupStart);
+      const warmupLines = descLines.slice(warmupStart + 1, mainSetStart).filter((l) => l.length > 0);
+      for (const line of warmupLines) {
+        expect(line).not.toMatch(/^- \d+[sm] /);
+      }
+    });
+
+    it('workout description sections are separated by blank lines', () => {
+      // The description must have at least one blank line between major sections
+      expect(green.workoutDescription).toMatch(/Warmup\n\n/);
+      expect(green.workoutDescription).toMatch(/Main Set\n\n/);
+      expect(green.workoutDescription).toMatch(/Cooldown\n\n/);
+    });
+
+    it('percentage intensity steps have correct format (e.g., 100% not 100% pace)', () => {
+      const stepLines = green.workoutDescription
+        .split('\n')
+        .filter((l) => l.startsWith('- ') && l.includes('%'));
+      expect(stepLines.length).toBeGreaterThan(0);
+      for (const line of stepLines) {
+        // Should match "- Xs 100%" or "- Xs 95-100%" but NOT "- Xs 100% pace"
+        expect(line).toMatch(/^- \d+s \d+(-\d+)?%$/);
+      }
+    });
+  });
 });
