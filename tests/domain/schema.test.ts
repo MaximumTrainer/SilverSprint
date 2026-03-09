@@ -85,7 +85,7 @@ describe('IntervalsWellnessSchema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('accepts rmssd field from wellness-ext endpoint', () => {
+  it('accepts rmssd field for backward compatibility', () => {
     const result = IntervalsWellnessSchema.safeParse({
       id: '2024-03-01',
       rmssd: 46.5,
@@ -98,7 +98,7 @@ describe('IntervalsWellnessSchema', () => {
     }
   });
 
-  it('accepts both hrv and rmssd together (wellness-ext extended response)', () => {
+  it('accepts both hrv and rmssd together', () => {
     const result = IntervalsWellnessSchema.safeParse({
       id: '2024-03-01',
       hrv: 62,

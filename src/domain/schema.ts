@@ -18,7 +18,7 @@ export const IntervalsWellnessSchema = z.object({
   date: z.string().optional(),
   /** HRV value in ms (standard wellness endpoint field) */
   hrv: z.number().optional(),
-  /** RMSSD in ms — the HRV field returned by the wellness-ext endpoint */
+  /** RMSSD in ms — legacy field from the wellness-ext endpoint; kept for backward compatibility */
   rmssd: z.number().optional(),
   restingHR: z.number().optional(),
   readiness: z.number().optional(),
