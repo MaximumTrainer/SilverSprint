@@ -74,11 +74,19 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
         const authHeader = btoa(`API_KEY:${apiKey}`);
         const headers = { Authorization: `Basic ${authHeader}` };
 
+        // Capture "today" once to ensure a consistent request window, even across midnight/DST.
+        const today = new Date();
+        const formatDateDaysAgo = (base: Date, daysAgo: number): string => {
+          const d = new Date(base);
+          d.setDate(d.getDate() - daysAgo);
+          return d.toISOString().slice(0, 10);
+        };
+
         // Fetch profile, activities, and wellness in parallel (they are independent)
-        const oldest = getDateDaysAgo(LOOKBACK_DAYS);
-        const newest = getDateDaysAgo(0);
+        const oldest = formatDateDaysAgo(today, LOOKBACK_DAYS);
+        const newest = formatDateDaysAgo(today, 0);
         // Wellness endpoint uses an inclusive date range: today − 59 days → today = 60 days
-        const wellnessOldest = getDateDaysAgo(LOOKBACK_DAYS - 1);
+        const wellnessOldest = formatDateDaysAgo(today, LOOKBACK_DAYS - 1);
         clientLogger.info('Fetching profile, activities, and wellness in parallel', athleteId);
 
         const [profileRes, activitiesRes, wellnessRes] = await Promise.all([
