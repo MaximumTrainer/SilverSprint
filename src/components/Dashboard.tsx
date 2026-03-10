@@ -364,8 +364,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
           )}
         </div>
 
-        {/* ── 60-Day Trend Charts ──────────────────────────── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12, marginBottom: 16 }}>
+        {/* ── 60-Day Trend Charts (2×2 block) ─────────────── */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 16 }}>
           <TimeSeriesChart
             data={dailyTimeSeries}
             dataKey="nfi"
