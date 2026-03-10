@@ -123,6 +123,39 @@ describe('IntervalsWellnessSchema', () => {
       expect(result.data.rmssd).toBeUndefined();
     }
   });
+
+  it('accepts null hrv and rmssd (API returns null for missing values)', () => {
+    const result = IntervalsWellnessSchema.safeParse({
+      id: '2024-03-01',
+      hrv: null,
+      rmssd: null,
+      restingHR: 52,
+      readiness: null,
+      weight: null,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hrv).toBeNull();
+      expect(result.data.rmssd).toBeNull();
+    }
+  });
+
+  it('accepts valid hrv even when other optional fields are null', () => {
+    // Intervals.icu returns null for unset fields; this must not reject valid HRV entries
+    const result = IntervalsWellnessSchema.safeParse({
+      id: '2024-03-15',
+      hrv: 58,
+      rmssd: null,
+      restingHR: null,
+      readiness: null,
+      weight: null,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hrv).toBe(58);
+      expect(result.data.rmssd).toBeNull();
+    }
+  });
 });
 
 /**

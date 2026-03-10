@@ -17,12 +17,12 @@ export const IntervalsWellnessSchema = z.object({
   id: z.string(),
   date: z.string().optional(),
   /** HRV value in ms (standard wellness endpoint field) */
-  hrv: z.number().optional(),
+  hrv: z.number().nullable().optional(),
   /** RMSSD in ms — legacy field from the wellness-ext endpoint; kept for backward compatibility */
-  rmssd: z.number().optional(),
-  restingHR: z.number().optional(),
-  readiness: z.number().optional(),
-  weight: z.number().optional(),
+  rmssd: z.number().nullable().optional(),
+  restingHR: z.number().nullable().optional(),
+  readiness: z.number().nullable().optional(),
+  weight: z.number().nullable().optional(),
 });
 
 export type IntervalsWellness = z.infer<typeof IntervalsWellnessSchema>;
