@@ -11,7 +11,7 @@ import { INTERVALS_BASE } from '../config/api';
 export interface IntervalsDataState {
   activities: IntervalsActivity[];
   intervals: TrackInterval[];
-  wellness: { hrv?: number; restingHR?: number; readiness?: number } | null;
+  wellness: { hrv?: number | null; restingHR?: number | null; readiness?: number | null } | null;
   nfi: number;
   nfiStatus: NFIStatus;
   avgVmax: number;
@@ -172,8 +172,8 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
 
         // 5. Calculate HRV-based recovery (§3.2)
         // wellness endpoint returns hrv as the primary HRV field; fall back to rmssd for compatibility
-        const extractHRV = (w: { rmssd?: number; hrv?: number }): number | undefined =>
-          w.hrv ?? w.rmssd;
+        const extractHRV = (w: { rmssd?: number | null; hrv?: number | null }): number | undefined =>
+          w.hrv ?? w.rmssd ?? undefined;
         const currentHRV = extractHRV(latestWellness ?? {}) || DEFAULT_HRV;
         const recentHRVs = wellnessEntries
           .slice(0, 7)
@@ -388,7 +388,7 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
  */
 function buildDailyTimeSeries(
   activities: IntervalsActivity[],
-  wellnessEntries: Array<{ id: string; date?: string; hrv?: number; rmssd?: number }>,
+  wellnessEntries: Array<{ id: string; date?: string | null; hrv?: number | null; rmssd?: number | null }>,
   avgVmax: number,
   avgHRV7d: number,
   age: number,

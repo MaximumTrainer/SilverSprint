@@ -123,6 +123,55 @@ describe('IntervalsWellnessSchema', () => {
       expect(result.data.rmssd).toBeUndefined();
     }
   });
+
+  it('accepts null values for numeric wellness fields (Intervals.icu API returns null for missing data)', () => {
+    const result = IntervalsWellnessSchema.safeParse({
+      id: '2024-03-01',
+      hrv: null,
+      rmssd: null,
+      restingHR: null,
+      readiness: null,
+      weight: null,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hrv).toBeNull();
+      expect(result.data.rmssd).toBeNull();
+      expect(result.data.restingHR).toBeNull();
+      expect(result.data.readiness).toBeNull();
+      expect(result.data.weight).toBeNull();
+    }
+  });
+
+  it('accepts a mix of null and valid numeric fields', () => {
+    const result = IntervalsWellnessSchema.safeParse({
+      id: '2024-03-01',
+      hrv: null,
+      rmssd: 46.5,
+      restingHR: 54,
+      weight: null,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hrv).toBeNull();
+      expect(result.data.rmssd).toBe(46.5);
+      expect(result.data.restingHR).toBe(54);
+      expect(result.data.weight).toBeNull();
+    }
+  });
+
+  it('accepts null date field', () => {
+    const result = IntervalsWellnessSchema.safeParse({
+      id: '2024-03-01',
+      date: null,
+      hrv: 62,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.date).toBeNull();
+      expect(result.data.hrv).toBe(62);
+    }
+  });
 });
 
 /**

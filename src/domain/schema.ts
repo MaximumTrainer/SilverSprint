@@ -15,14 +15,14 @@ export type IntervalsActivity = z.infer<typeof IntervalsActivitySchema>;
 
 export const IntervalsWellnessSchema = z.object({
   id: z.string(),
-  date: z.string().optional(),
+  date: z.string().nullish(),
   /** HRV value in ms (standard wellness endpoint field) */
-  hrv: z.number().optional(),
+  hrv: z.number().nullish(),
   /** RMSSD in ms — legacy field from the wellness-ext endpoint; kept for backward compatibility */
-  rmssd: z.number().optional(),
-  restingHR: z.number().optional(),
-  readiness: z.number().optional(),
-  weight: z.number().optional(),
+  rmssd: z.number().nullish(),
+  restingHR: z.number().nullish(),
+  readiness: z.number().nullish(),
+  weight: z.number().nullish(),
 });
 
 export type IntervalsWellness = z.infer<typeof IntervalsWellnessSchema>;
