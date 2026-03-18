@@ -302,31 +302,27 @@ export class SprintWorkoutGenerator {
     return lines.join('\n');
   }
 
-  /** Convert a sprint block distance string to an intervals.icu step segment.
-   *  Examples: "30m" → "5s 100%", "10 min total" → "10m Z1"
+  /** Convert a sprint block distance string to an intervals.icu pace-based step segment.
+   *  Examples: "30m" → "30mtr 100% Pace intensity=active", "10 min total" → "10m Z2 Pace intensity=active"
    */
   private static toIcuStep(distanceStr: string, intensityStr: string): string {
     const intensity = this.toIcuIntensity(intensityStr);
 
     // Time-range: "15–20 min" → take upper bound → "20m"
     const rangeMinMatch = distanceStr.match(/(\d+)[–\-](\d+)\s*min/i);
-    if (rangeMinMatch) return `${rangeMinMatch[2]}m ${intensity}`;
+    if (rangeMinMatch) return `${rangeMinMatch[2]}m ${intensity} Pace intensity=active`;
 
     // Plain time: "10 min total", "10 min" → "10m"
     const minMatch = distanceStr.match(/(\d+)\s*min/i);
-    if (minMatch) return `${minMatch[1]}m ${intensity}`;
+    if (minMatch) return `${minMatch[1]}m ${intensity} Pace intensity=active`;
 
-    // Distance in meters: estimate sprint time in seconds
-    // Approximation: seconds ≈ meters / 6 (typical masters sprint average speed ~6 m/s)
-    // Gives ~3s for 20m, ~5s for 30m, ~10s for 60m; minimum 3s
+    // Distance in meters: use mtr notation for pace-based target
     const meterMatch = distanceStr.match(/^(\d+(?:\.\d+)?)\s*m\b/i);
     if (meterMatch) {
-      const MASTERS_SPRINT_SPEED_MPS = 6;
-      const secs = Math.max(3, Math.round(parseFloat(meterMatch[1]) / MASTERS_SPRINT_SPEED_MPS));
-      return `${secs}s ${intensity}`;
+      return `${Math.round(parseFloat(meterMatch[1]))}mtr ${intensity} Pace intensity=active`;
     }
 
-    return `${distanceStr} ${intensity}`;
+    return `${distanceStr} ${intensity} Pace intensity=active`;
   }
 
   /** Convert intensity string to intervals.icu notation. */
@@ -351,17 +347,17 @@ export class SprintWorkoutGenerator {
   private static toIcuRest(restStr: string): string {
     if (!restStr || restStr === 'N/A' || /^continuous$/i.test(restStr)) return '';
 
-    // "3–4 min walk" → "4m Z1" (use upper bound)
+    // "3–4 min walk" → "4m Z1 Pace intensity=rest" (use upper bound)
     const rangeMinMatch = restStr.match(/(\d+)[–\-](\d+)\s*min/i);
-    if (rangeMinMatch) return `${rangeMinMatch[2]}m Z1`;
+    if (rangeMinMatch) return `${rangeMinMatch[2]}m Z1 Pace intensity=rest`;
 
-    // "4 min walk-back", "3 min walk" → "4m Z1"
+    // "4 min walk-back", "3 min walk" → "4m Z1 Pace intensity=rest"
     const minMatch = restStr.match(/(\d+)\s*min/i);
-    if (minMatch) return `${minMatch[1]}m Z1`;
+    if (minMatch) return `${minMatch[1]}m Z1 Pace intensity=rest`;
 
-    // "90s walk-back" → "90s Z1"
+    // "90s walk-back" → "90s Z1 Pace intensity=rest"
     const secMatch = restStr.match(/(\d+)s\b/i);
-    if (secMatch) return `${secMatch[1]}s Z1`;
+    if (secMatch) return `${secMatch[1]}s Z1 Pace intensity=rest`;
 
     return '';
   }
