@@ -222,32 +222,34 @@ describe('SprintWorkoutGenerator', () => {
       }
     });
 
-    it('step lines do not use "pace" notation', () => {
-      const allStepLines = [green, amber, red, reactivation].flatMap((w) =>
-        w.workoutDescription.split('\n').filter((l) => l.startsWith('- '))
+    it('work step lines use Pace notation with intensity=active', () => {
+      const allWorkStepLines = [green, amber, red, reactivation].flatMap((w) =>
+        w.workoutDescription.split('\n').filter((l) => l.startsWith('- ') && l.includes('intensity=active'))
       );
-      expect(allStepLines.length).toBeGreaterThan(0);
-      for (const line of allStepLines) {
-        expect(line.toLowerCase()).not.toContain('pace');
+      expect(allWorkStepLines.length).toBeGreaterThan(0);
+      for (const line of allWorkStepLines) {
+        expect(line).toContain('Pace');
+        expect(line).toContain('intensity=active');
       }
     });
 
-    it('zone step lines use bare zone names (e.g., Z1 not Z1 Pace)', () => {
-      const allStepLines = [green, amber, red, reactivation].flatMap((w) =>
-        w.workoutDescription.split('\n').filter((l) => l.startsWith('- '))
+    it('rest step lines include intensity=rest tag', () => {
+      const allRestStepLines = [green, amber, red, reactivation].flatMap((w) =>
+        w.workoutDescription.split('\n').filter((l) => l.startsWith('- ') && l.includes('intensity=rest'))
       );
-      for (const line of allStepLines) {
-        expect(line).not.toMatch(/Z\d\s+Pace/i);
+      expect(allRestStepLines.length).toBeGreaterThan(0);
+      for (const line of allRestStepLines) {
+        expect(line).toContain('intensity=rest');
       }
     });
 
-    it('step lines use time-based duration in seconds or minutes', () => {
+    it('step lines use mtr for distance-based steps or time (s/m) for time-based steps', () => {
       const allStepLines = [green, amber, red, reactivation].flatMap((w) =>
         w.workoutDescription.split('\n').filter((l) => l.startsWith('- '))
       );
       for (const line of allStepLines) {
-        // Each step must start with "- Xs " (seconds) or "- Xm " (minutes)
-        expect(line).toMatch(/^- \d+[sm] /);
+        // Each step must start with "- Xmtr " (distance) or "- X[sm] " (time)
+        expect(line).toMatch(/^- \d+(mtr|[sm]) /);
       }
     });
 
@@ -294,14 +296,14 @@ describe('SprintWorkoutGenerator', () => {
       expect(green.workoutDescription).toMatch(/Cooldown\n\n/);
     });
 
-    it('percentage intensity steps have correct format (e.g., 100% not 100% pace)', () => {
+    it('distance-based work steps use mtr notation with Pace (e.g., 30mtr 100% Pace intensity=active)', () => {
       const stepLines = green.workoutDescription
         .split('\n')
         .filter((l) => l.startsWith('- ') && l.includes('%'));
       expect(stepLines.length).toBeGreaterThan(0);
       for (const line of stepLines) {
-        // Should match "- Xs 100%" or "- Xs 95-100%" but NOT "- Xs 100% pace"
-        expect(line).toMatch(/^- \d+s \d+(-\d+)?%$/);
+        // Should match "- 30mtr 100% Pace intensity=active" or "- 60mtr 95-100% Pace intensity=active"
+        expect(line).toMatch(/^- \d+mtr \d+(-\d+)?% Pace intensity=active$/);
       }
     });
   });
