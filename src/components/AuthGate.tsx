@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { Zap } from 'lucide-react';
 import { clientLogger } from '../logger';
 import { INTERVALS_BASE } from '../config/api';
-import { persistLogin } from '../lib/auth-storage';
+import { persistLogin, buildAuthorizationHeader, AuthCredentials } from '../lib/auth-storage';
+import { initiateOAuthFlow, getOAuthRedirectUri } from '../lib/oauth';
 
-interface AuthCredentials {
-  athleteId: string;
-  apiKey: string;
+/** Local UI state for the manual login form. */
+interface ManualFormState {
+  username: string;
+  password: string;
 }
 
 interface AuthGateProps {
@@ -16,10 +18,9 @@ interface AuthGateProps {
 async function validateWithIntervals(credentials: AuthCredentials): Promise<boolean> {
   try {
     clientLogger.info('Validating credentials with Intervals.icu', credentials.athleteId);
-    const authHeader = btoa(`API_KEY:${credentials.apiKey}`);
     const res = await fetch(
       `${INTERVALS_BASE}/api/v1/athlete/${credentials.athleteId}/profile`,
-      { headers: { Authorization: `Basic ${authHeader}` } }
+      { headers: { Authorization: buildAuthorizationHeader(credentials) } }
     );
     if (res.ok) {
       clientLogger.info('Authentication successful', credentials.athleteId);
@@ -34,17 +35,23 @@ async function validateWithIntervals(credentials: AuthCredentials): Promise<bool
 }
 
 export const AuthGate: React.FC<AuthGateProps> = ({ onLogin }) => {
-  const [credentials, setCredentials] = useState<AuthCredentials>({
-    athleteId: (import.meta.env.DEV && import.meta.env.INTERVALS_ATHLETE_ID) || '',
-    apiKey: (import.meta.env.DEV && import.meta.env.INTERVALS_API_KEY) || '',
+  const [form, setForm] = useState<ManualFormState>({
+    username: (import.meta.env.DEV && import.meta.env.INTERVALS_ATHLETE_ID) || '',
+    password: (import.meta.env.DEV && import.meta.env.INTERVALS_API_KEY) || '',
   });
   const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleAuth = async () => {
+  const handleManualAuth = async () => {
     setLoading(true);
     setError(null);
+    const credentials: AuthCredentials = {
+      athleteId: form.username,
+      accessToken: form.password,
+      authType: 'basic',
+    };
     const isValid = await validateWithIntervals(credentials);
     setLoading(false);
     if (isValid) {
@@ -54,7 +61,20 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onLogin }) => {
       }
       onLogin(credentials);
     } else {
-      setError('Invalid credentials. Check your Athlete ID and API Key.');
+      setError('Invalid credentials. Check your Username and Password.');
+    }
+  };
+
+  const handleOAuthLogin = async () => {
+    setOauthLoading(true);
+    setError(null);
+    try {
+      await initiateOAuthFlow(getOAuthRedirectUri());
+      // Browser will redirect — execution stops here.
+    } catch (err) {
+      clientLogger.error('Failed to initiate OAuth flow', '', err);
+      setError('Could not start Intervals.icu login. Please try again.');
+      setOauthLoading(false);
     }
   };
 
@@ -81,28 +101,45 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onLogin }) => {
           </div>
         </div>
 
+        {/* OAuth 2.0 login button */}
+        <button
+          onClick={handleOAuthLogin}
+          disabled={oauthLoading || loading}
+          className="icu-btn"
+          style={{ width: '100%', justifyContent: 'center', padding: '10px 0', fontSize: 14, marginBottom: 20 }}
+        >
+          {oauthLoading ? 'Redirecting…' : 'Connect with Intervals.icu'}
+        </button>
+
+        {/* Divider */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+          <div style={{ flex: 1, height: 1, background: 'var(--icu-border)' }} />
+          <span style={{ fontSize: 11, color: 'var(--icu-text-disabled)' }}>or use API key</span>
+          <div style={{ flex: 1, height: 1, background: 'var(--icu-border)' }} />
+        </div>
+
         <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--icu-text-secondary)', display: 'block', marginBottom: 4 }}>
-          Athlete ID
+          Username
         </label>
         <input
           type="text"
           placeholder="e.g. i12345"
           className="icu-input"
           style={{ width: '100%', marginBottom: 16, boxSizing: 'border-box' }}
-          value={credentials.athleteId}
-          onChange={(e) => setCredentials({ ...credentials, athleteId: e.target.value })}
+          value={form.username}
+          onChange={(e) => setForm({ ...form, username: e.target.value })}
         />
 
         <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--icu-text-secondary)', display: 'block', marginBottom: 4 }}>
-          API Key
+          Password
         </label>
         <input
           type="password"
           placeholder="Intervals.icu API key"
           className="icu-input"
           style={{ width: '100%', marginBottom: 16, boxSizing: 'border-box' }}
-          value={credentials.apiKey}
-          onChange={(e) => setCredentials({ ...credentials, apiKey: e.target.value })}
+          value={form.password}
+          onChange={(e) => setForm({ ...form, password: e.target.value })}
         />
 
         <label
@@ -126,12 +163,12 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onLogin }) => {
         </label>
 
         <button
-          onClick={handleAuth}
-          disabled={loading || !credentials.athleteId || !credentials.apiKey}
-          className="icu-btn"
+          onClick={handleManualAuth}
+          disabled={loading || oauthLoading || !form.username || !form.password}
+          className="icu-btn-ghost"
           style={{ width: '100%', justifyContent: 'center', padding: '10px 0', fontSize: 14 }}
         >
-          {loading ? 'Connecting…' : 'Connect'}
+          {loading ? 'Connecting…' : 'Connect with API Key'}
         </button>
         {error && (
           <p style={{ color: 'var(--icu-red)', fontSize: 12, marginTop: 12, textAlign: 'center' }}>

@@ -43,7 +43,7 @@ const RACE_LOOKAHEAD_DAYS = 90;
 /** Default HRV value when no wellness data is available */
 const DEFAULT_HRV = 60;
 
-export const useIntervalsData = (athleteId: string, apiKey: string) => {
+export const useIntervalsData = (athleteId: string, accessToken: string, authType: 'basic' | 'bearer' = 'basic') => {
   const [data, setData] = useState<IntervalsDataState>({
     activities: [],
     intervals: [],
@@ -71,8 +71,10 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
     const fetchAllData = async () => {
       try {
         clientLogger.info('Starting data sync', athleteId);
-        const authHeader = btoa(`API_KEY:${apiKey}`);
-        const headers = { Authorization: `Basic ${authHeader}` };
+        const authHeader = authType === 'bearer'
+          ? `Bearer ${accessToken}`
+          : `Basic ${btoa(`API_KEY:${accessToken}`)}`;
+        const headers = { Authorization: authHeader };
 
         // Capture "today" once to ensure a consistent request window, even across midnight/DST.
         const today = new Date();
@@ -373,10 +375,10 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
       }
     };
 
-    if (athleteId && apiKey) {
+    if (athleteId && accessToken) {
       fetchAllData();
     }
-  }, [athleteId, apiKey]);
+  }, [athleteId, accessToken, authType]);
 
   return data;
 };

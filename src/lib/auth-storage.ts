@@ -13,7 +13,21 @@
 
 export interface AuthCredentials {
   athleteId: string;
-  apiKey: string;
+  /** OAuth Bearer token (when authType is 'bearer') or Intervals.icu API key (when authType is 'basic'). */
+  accessToken: string;
+  /** Authentication method to use for Intervals.icu API calls. Defaults to 'basic'. */
+  authType: 'basic' | 'bearer';
+}
+
+/**
+ * Build the appropriate HTTP `Authorization` header value for Intervals.icu API calls.
+ * Uses Bearer for OAuth tokens, or the legacy `Basic API_KEY:<key>` scheme for API keys.
+ */
+export function buildAuthorizationHeader(credentials: AuthCredentials): string {
+  if (credentials.authType === 'bearer') {
+    return `Bearer ${credentials.accessToken}`;
+  }
+  return `Basic ${btoa(`API_KEY:${credentials.accessToken}`)}`;
 }
 
 const COOKIE_NAME = 'ss_auth';
@@ -93,11 +107,13 @@ export async function decryptCredentials(encrypted: string): Promise<AuthCredent
       parsed !== null &&
       typeof parsed === 'object' &&
       'athleteId' in parsed &&
-      'apiKey' in parsed &&
+      'accessToken' in parsed &&
       typeof (parsed as { athleteId: unknown }).athleteId === 'string' &&
-      typeof (parsed as { apiKey: unknown }).apiKey === 'string'
+      typeof (parsed as { accessToken: unknown }).accessToken === 'string'
     ) {
-      return parsed as AuthCredentials;
+      const raw = parsed as { athleteId: string; accessToken: string; authType?: unknown };
+      const authType: 'basic' | 'bearer' = raw.authType === 'bearer' ? 'bearer' : 'basic';
+      return { athleteId: raw.athleteId, accessToken: raw.accessToken, authType };
     }
     return null;
   } catch {

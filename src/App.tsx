@@ -6,10 +6,11 @@ import { SprintWorkout } from './domain/sprint/workouts';
 import { clientLogger } from './logger';
 import { AlertCircle, Zap } from 'lucide-react';
 import { INTERVALS_BASE } from './config/api';
-import { loadPersistedLogin, clearAuthCookie } from './lib/auth-storage';
+import { AuthCredentials, buildAuthorizationHeader, loadPersistedLogin, clearAuthCookie } from './lib/auth-storage';
+import { handleOAuthCallback, getOAuthRedirectUri } from './lib/oauth';
 
 const App: React.FC = () => {
-  const [auth, setAuth] = useState<{ athleteId: string; apiKey: string } | null>(null);
+  const [auth, setAuth] = useState<AuthCredentials | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
 
   // 1. Check for existing session on mount (dev env vars take priority)
@@ -19,15 +20,43 @@ const App: React.FC = () => {
       const devApiKey = import.meta.env.INTERVALS_API_KEY;
 
       if (import.meta.env.DEV && devAthleteId && devApiKey) {
-        setAuth({ athleteId: devAthleteId, apiKey: devApiKey });
+        setAuth({ athleteId: devAthleteId, accessToken: devApiKey, authType: 'basic' });
       } else {
-        // 1a. Current-tab sessionStorage takes priority
+        // 1a. Handle OAuth 2.0 callback: check for ?code= in the URL
+        const params = new URLSearchParams(window.location.search);
+        const oauthCode = params.get('code');
+        if (oauthCode) {
+          try {
+            clientLogger.info('Handling OAuth callback', '');
+            const credentials = await handleOAuthCallback(oauthCode, getOAuthRedirectUri());
+            // Remove the ?code= from the URL without triggering a page reload
+            window.history.replaceState({}, document.title, window.location.pathname);
+            sessionStorage.setItem('silver_sprint_auth', JSON.stringify(credentials));
+            setAuth(credentials);
+            setIsInitializing(false);
+            return;
+          } catch (err) {
+            clientLogger.error('OAuth callback handling failed', '', err);
+            // Fall through to normal login flow
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        }
+
+        // 1b. Current-tab sessionStorage takes priority
         const savedAuth = sessionStorage.getItem('silver_sprint_auth');
         if (savedAuth) {
           try {
             const parsed = JSON.parse(savedAuth);
-            if (parsed && typeof parsed.athleteId === 'string' && typeof parsed.apiKey === 'string') {
-              setAuth(parsed);
+            if (
+              parsed &&
+              typeof parsed.athleteId === 'string' &&
+              typeof parsed.accessToken === 'string'
+            ) {
+              setAuth({
+                athleteId: parsed.athleteId,
+                accessToken: parsed.accessToken,
+                authType: parsed.authType === 'bearer' ? 'bearer' : 'basic',
+              });
               setIsInitializing(false);
               return;
             } else {
@@ -37,7 +66,7 @@ const App: React.FC = () => {
             sessionStorage.removeItem('silver_sprint_auth');
           }
         }
-        // 1b. Fall back to the persistent encrypted cookie (cross-session)
+        // 1c. Fall back to the persistent encrypted cookie (cross-session)
         const persisted = await loadPersistedLogin();
         if (persisted) {
           sessionStorage.setItem('silver_sprint_auth', JSON.stringify(persisted));
@@ -54,7 +83,7 @@ const App: React.FC = () => {
   const {
     intervals, wellness, nfi, nfiStatus, avgVmax, todayVmax,
     recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, loading, error,
-  } = useIntervalsData(auth?.athleteId || '', auth?.apiKey || '');
+  } = useIntervalsData(auth?.athleteId || '', auth?.accessToken || '', auth?.authType || 'basic');
 
   const handleLogout = () => {
     sessionStorage.removeItem('silver_sprint_auth');
@@ -63,7 +92,7 @@ const App: React.FC = () => {
     const devAthleteId = import.meta.env.INTERVALS_ATHLETE_ID;
     const devApiKey = import.meta.env.INTERVALS_API_KEY;
     if (import.meta.env.DEV && devAthleteId && devApiKey) {
-      setAuth({ athleteId: devAthleteId, apiKey: devApiKey });
+      setAuth({ athleteId: devAthleteId, accessToken: devApiKey, authType: 'basic' });
     } else {
       setAuth(null);
     }
@@ -74,13 +103,12 @@ const App: React.FC = () => {
     if (!auth) return false;
     try {
       clientLogger.info(`Pushing workout "${workout.name}" to ${date}`, auth.athleteId);
-      const authHeader = btoa(`API_KEY:${auth.apiKey}`);
       const res = await fetch(
         `${INTERVALS_BASE}/api/v1/athlete/${auth.athleteId}/events`,
         {
           method: 'POST',
           headers: {
-            Authorization: `Basic ${authHeader}`,
+            Authorization: buildAuthorizationHeader(auth),
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -110,13 +138,12 @@ const App: React.FC = () => {
     if (!auth) return false;
     try {
       clientLogger.info(`Pushing session "${sessionName}" for ${raceName} to ${date}`, auth.athleteId);
-      const authHeader = btoa(`API_KEY:${auth.apiKey}`);
       const res = await fetch(
         `${INTERVALS_BASE}/api/v1/athlete/${auth.athleteId}/events`,
         {
           method: 'POST',
           headers: {
-            Authorization: `Basic ${authHeader}`,
+            Authorization: buildAuthorizationHeader(auth),
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
