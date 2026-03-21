@@ -166,11 +166,27 @@ export async function handleOAuthCallback(code: string, returnedState: string | 
 }
 
 /**
+ * Build the OAuth redirect URI from the app's Vite base path and the current
+ * page URL.
+ *
+ * Resolving a relative `base` (e.g. `./`) against the full `href` (rather than
+ * just the origin) correctly handles sub-path deployments like GitHub Pages.
+ * Any query-string parameters in `href` (e.g. `?code=…` during an OAuth
+ * callback) are stripped automatically by the relative URL resolution so the
+ * returned URI is always the same clean path.
+ *
+ * @internal Exported for unit testing only — prefer {@link getOAuthRedirectUri}
+ *   in application code.
+ */
+export function _buildRedirectUri(base: string, href: string): string {
+  return new URL(base, href).toString();
+}
+
+/**
  * Return the redirect URI for the current deployment, including the app base
  * path so it works both at the origin root and from sub-paths like GitHub Pages
  * (e.g. https://maximumtrainer.github.io/SilverSprint/).
  */
 export function getOAuthRedirectUri(): string {
-  const base = import.meta.env.BASE_URL ?? '/';
-  return new URL(base, window.location.origin).toString();
+  return _buildRedirectUri(import.meta.env.BASE_URL ?? '/', window.location.href);
 }
