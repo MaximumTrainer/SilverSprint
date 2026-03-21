@@ -4,6 +4,7 @@ import { SilverSprintLogic, HRVData, NFIStatus } from '../domain/sprint/core';
 import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../domain/sprint/race-estimator';
 import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sprint/race-plan';
 import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsEventSchema, IntervalsAthleteSchema, IntervalsIntervalSchema, IntervalsActivity, IntervalsWellness, IntervalsEvent } from '../domain/schema';
+import { buildAuthorizationHeader } from '../lib/auth-storage';
 import { clientLogger } from '../logger';
 import type { DailyDataPoint } from '../domain/types';
 import { INTERVALS_BASE } from '../config/api';
@@ -43,7 +44,7 @@ const RACE_LOOKAHEAD_DAYS = 90;
 /** Default HRV value when no wellness data is available */
 const DEFAULT_HRV = 60;
 
-export const useIntervalsData = (athleteId: string, apiKey: string) => {
+export const useIntervalsData = (athleteId: string, accessToken: string, authType: 'basic' | 'bearer' = 'basic') => {
   const [data, setData] = useState<IntervalsDataState>({
     activities: [],
     intervals: [],
@@ -71,8 +72,7 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
     const fetchAllData = async () => {
       try {
         clientLogger.info('Starting data sync', athleteId);
-        const authHeader = btoa(`API_KEY:${apiKey}`);
-        const headers = { Authorization: `Basic ${authHeader}` };
+        const headers = { Authorization: buildAuthorizationHeader({ athleteId, accessToken, authType }) };
 
         // Capture "today" once to ensure a consistent request window, even across midnight/DST.
         const today = new Date();
@@ -373,10 +373,10 @@ export const useIntervalsData = (athleteId: string, apiKey: string) => {
       }
     };
 
-    if (athleteId && apiKey) {
+    if (athleteId && accessToken) {
       fetchAllData();
     }
-  }, [athleteId, apiKey]);
+  }, [athleteId, accessToken, authType]);
 
   return data;
 };

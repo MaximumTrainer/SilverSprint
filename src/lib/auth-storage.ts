@@ -13,7 +13,21 @@
 
 export interface AuthCredentials {
   athleteId: string;
-  apiKey: string;
+  /** OAuth Bearer token (when authType is 'bearer') or Intervals.icu API key (when authType is 'basic'). */
+  accessToken: string;
+  /** Authentication method to use for Intervals.icu API calls. Defaults to 'basic'. */
+  authType: 'basic' | 'bearer';
+}
+
+/**
+ * Build the appropriate HTTP `Authorization` header value for Intervals.icu API calls.
+ * Uses Bearer for OAuth tokens, or the legacy `Basic API_KEY:<key>` scheme for API keys.
+ */
+export function buildAuthorizationHeader(credentials: AuthCredentials): string {
+  if (credentials.authType === 'bearer') {
+    return `Bearer ${credentials.accessToken}`;
+  }
+  return `Basic ${btoa(`API_KEY:${credentials.accessToken}`)}`;
 }
 
 const COOKIE_NAME = 'ss_auth';
@@ -93,12 +107,29 @@ export async function decryptCredentials(encrypted: string): Promise<AuthCredent
       parsed !== null &&
       typeof parsed === 'object' &&
       'athleteId' in parsed &&
+      'accessToken' in parsed &&
+      typeof (parsed as { athleteId: unknown }).athleteId === 'string' &&
+      typeof (parsed as { accessToken: unknown }).accessToken === 'string'
+    ) {
+      const raw = parsed as { athleteId: string; accessToken: string; authType?: unknown };
+      const authType: 'basic' | 'bearer' = raw.authType === 'bearer' ? 'bearer' : 'basic';
+      return { athleteId: raw.athleteId, accessToken: raw.accessToken, authType };
+    }
+
+    // Backwards compatibility: accept the pre-OAuth cookie shape { athleteId, apiKey }
+    // and map it to the new shape with authType 'basic'.
+    if (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      'athleteId' in parsed &&
       'apiKey' in parsed &&
       typeof (parsed as { athleteId: unknown }).athleteId === 'string' &&
       typeof (parsed as { apiKey: unknown }).apiKey === 'string'
     ) {
-      return parsed as AuthCredentials;
+      const legacy = parsed as { athleteId: string; apiKey: string };
+      return { athleteId: legacy.athleteId, accessToken: legacy.apiKey, authType: 'basic' };
     }
+
     return null;
   } catch {
     return null;
