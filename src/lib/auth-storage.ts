@@ -115,6 +115,21 @@ export async function decryptCredentials(encrypted: string): Promise<AuthCredent
       const authType: 'basic' | 'bearer' = raw.authType === 'bearer' ? 'bearer' : 'basic';
       return { athleteId: raw.athleteId, accessToken: raw.accessToken, authType };
     }
+
+    // Backwards compatibility: accept the pre-OAuth cookie shape { athleteId, apiKey }
+    // and map it to the new shape with authType 'basic'.
+    if (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      'athleteId' in parsed &&
+      'apiKey' in parsed &&
+      typeof (parsed as { athleteId: unknown }).athleteId === 'string' &&
+      typeof (parsed as { apiKey: unknown }).apiKey === 'string'
+    ) {
+      const legacy = parsed as { athleteId: string; apiKey: string };
+      return { athleteId: legacy.athleteId, accessToken: legacy.apiKey, authType: 'basic' };
+    }
+
     return null;
   } catch {
     return null;

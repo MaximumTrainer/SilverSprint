@@ -21,6 +21,9 @@ const OAUTH_SCOPES = 'ACTIVITY:READ,WELLNESS:READ,SETTINGS:READ';
 /** sessionStorage key for the PKCE code verifier. */
 const PKCE_VERIFIER_KEY = 'ss_pkce_verifier';
 
+/** sessionStorage key for the OAuth CSRF state token. */
+const OAUTH_STATE_KEY = 'ss_oauth_state';
+
 /** Base64url-encode a Uint8Array (no padding, URL-safe characters). */
 function base64UrlEncode(buffer: Uint8Array): string {
   let binary = '';
@@ -56,7 +59,13 @@ export async function initiateOAuthFlow(redirectUri: string): Promise<void> {
   const verifier = generateCodeVerifier();
   const challenge = await generateCodeChallenge(verifier);
 
+  // Generate a cryptographically-random state token for CSRF protection.
+  const stateBytes = new Uint8Array(16);
+  crypto.getRandomValues(stateBytes);
+  const state = base64UrlEncode(stateBytes);
+
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+  sessionStorage.setItem(OAUTH_STATE_KEY, state);
 
   const params = new URLSearchParams({
     client_id: OAUTH_CLIENT_ID,
@@ -65,6 +74,7 @@ export async function initiateOAuthFlow(redirectUri: string): Promise<void> {
     response_type: 'code',
     code_challenge: challenge,
     code_challenge_method: 'S256',
+    state,
   });
 
   window.location.href = `${OAUTH_AUTHORIZE_URL}?${params.toString()}`;
@@ -80,17 +90,31 @@ interface OAuthTokenResponse {
 
 /**
  * Exchange an authorization `code` (received via the OAuth redirect) for an
- * access token.  Retrieves the PKCE verifier from sessionStorage.
+ * access token.  Retrieves the PKCE verifier and validates the `state` from
+ * sessionStorage to guard against CSRF/login injection attacks.
  *
  * @param code - The authorization code from the `?code=` query parameter.
+ * @param returnedState - The `?state=` value from the redirect URL; must match
+ *   the value stored in sessionStorage by {@link initiateOAuthFlow}.
  * @param redirectUri - Must exactly match the redirect URI used in the initial request.
  * @returns Resolved `AuthCredentials` ready to be stored and used for API calls.
- * @throws If the token exchange fails or the response is missing required fields.
+ * @throws If state validation fails, token exchange fails, or athlete ID is missing.
  */
-export async function handleOAuthCallback(code: string, redirectUri: string): Promise<AuthCredentials> {
+export async function handleOAuthCallback(code: string, returnedState: string | null, redirectUri: string): Promise<AuthCredentials> {
   const codeVerifier = sessionStorage.getItem(PKCE_VERIFIER_KEY);
+  const expectedState = sessionStorage.getItem(OAUTH_STATE_KEY);
+
+  // Always clear the stored verifier and state immediately, whether we succeed
+  // or fail, so they cannot be replayed by a subsequent request.
+  sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+  sessionStorage.removeItem(OAUTH_STATE_KEY);
+
   if (!codeVerifier) {
     throw new Error('PKCE code verifier not found in session. The OAuth flow may have been interrupted.');
+  }
+
+  if (!expectedState || returnedState !== expectedState) {
+    throw new Error('OAuth state mismatch — possible CSRF attack. Please try signing in again.');
   }
 
   const body = new URLSearchParams({
@@ -138,13 +162,15 @@ export async function handleOAuthCallback(code: string, redirectUri: string): Pr
     throw new Error('Could not determine athlete ID from OAuth token response');
   }
 
-  // Clean up the verifier now that the exchange is complete.
-  sessionStorage.removeItem(PKCE_VERIFIER_KEY);
-
   return { athleteId, accessToken: data.access_token, authType: 'bearer' };
 }
 
-/** Return the redirect URI for the current origin (root path). */
+/**
+ * Return the redirect URI for the current deployment, including the app base
+ * path so it works both at the origin root and from sub-paths like GitHub Pages
+ * (e.g. https://maximumtrainer.github.io/SilverSprint/).
+ */
 export function getOAuthRedirectUri(): string {
-  return `${window.location.origin}/`;
+  const base = import.meta.env.BASE_URL ?? '/';
+  return new URL(base, window.location.origin).toString();
 }

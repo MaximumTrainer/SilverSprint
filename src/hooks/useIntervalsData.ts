@@ -4,6 +4,7 @@ import { SilverSprintLogic, HRVData, NFIStatus } from '../domain/sprint/core';
 import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../domain/sprint/race-estimator';
 import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sprint/race-plan';
 import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsEventSchema, IntervalsAthleteSchema, IntervalsIntervalSchema, IntervalsActivity, IntervalsWellness, IntervalsEvent } from '../domain/schema';
+import { buildAuthorizationHeader } from '../lib/auth-storage';
 import { clientLogger } from '../logger';
 import type { DailyDataPoint } from '../domain/types';
 import { INTERVALS_BASE } from '../config/api';
@@ -71,10 +72,7 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
     const fetchAllData = async () => {
       try {
         clientLogger.info('Starting data sync', athleteId);
-        const authHeader = authType === 'bearer'
-          ? `Bearer ${accessToken}`
-          : `Basic ${btoa(`API_KEY:${accessToken}`)}`;
-        const headers = { Authorization: authHeader };
+        const headers = { Authorization: buildAuthorizationHeader({ athleteId, accessToken, authType }) };
 
         // Capture "today" once to ensure a consistent request window, even across midnight/DST.
         const today = new Date();

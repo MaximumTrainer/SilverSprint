@@ -74,6 +74,37 @@ describe('auth-storage encryption', () => {
 
     expect(await decryptCredentials(encoded)).toBeNull();
   });
+
+  it('migrates legacy { athleteId, apiKey } cookie shape to new format with authType basic', async () => {
+    // Simulate an old cookie encrypted before the OAuth migration
+    const key = await (async () => {
+      const km = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(_TEST_PBKDF2_PASSPHRASE),
+        'PBKDF2',
+        false,
+        ['deriveKey'],
+      );
+      return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: new TextEncoder().encode(_TEST_PBKDF2_SALT), iterations: 100_000, hash: 'SHA-256' },
+        km,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt'],
+      );
+    })();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const legacyData = JSON.stringify({ athleteId: 'i12345', apiKey: 'legacy_api_key' });
+    const plaintext = new TextEncoder().encode(legacyData);
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+    const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+    combined.set(iv);
+    combined.set(new Uint8Array(ciphertext), iv.length);
+    const encoded = btoa(String.fromCharCode(...combined));
+
+    const result = await decryptCredentials(encoded);
+    expect(result).toEqual({ athleteId: 'i12345', accessToken: 'legacy_api_key', authType: 'basic' });
+  });
 });
 
 describe('buildAuthorizationHeader', () => {

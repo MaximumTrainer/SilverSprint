@@ -6,7 +6,7 @@ import { SprintWorkout } from './domain/sprint/workouts';
 import { clientLogger } from './logger';
 import { AlertCircle, Zap } from 'lucide-react';
 import { INTERVALS_BASE } from './config/api';
-import { AuthCredentials, buildAuthorizationHeader, loadPersistedLogin, clearAuthCookie } from './lib/auth-storage';
+import { AuthCredentials, buildAuthorizationHeader, loadPersistedLogin, clearAuthCookie, persistLogin } from './lib/auth-storage';
 import { handleOAuthCallback, getOAuthRedirectUri } from './lib/oauth';
 
 const App: React.FC = () => {
@@ -22,15 +22,27 @@ const App: React.FC = () => {
       if (import.meta.env.DEV && devAthleteId && devApiKey) {
         setAuth({ athleteId: devAthleteId, accessToken: devApiKey, authType: 'basic' });
       } else {
-        // 1a. Handle OAuth 2.0 callback: check for ?code= in the URL
+        // 1a. Handle OAuth 2.0 callback: check for ?code= or ?error= in the URL
         const params = new URLSearchParams(window.location.search);
         const oauthCode = params.get('code');
-        if (oauthCode) {
+        const oauthState = params.get('state');
+        const oauthError = params.get('error');
+
+        if (oauthError) {
+          // Authorization server reported an error (e.g. access_denied).
+          // Log only the stable error code, not the server-provided description which
+          // could contain untrusted content from the redirect URL.
+          clientLogger.warn(`OAuth authorization error: ${oauthError}`, '');
+          window.history.replaceState({}, document.title, window.location.pathname);
+          // Fall through to the normal login/session flow.
+        } else if (oauthCode) {
           try {
             clientLogger.info('Handling OAuth callback', '');
-            const credentials = await handleOAuthCallback(oauthCode, getOAuthRedirectUri());
-            // Remove the ?code= from the URL without triggering a page reload
+            const credentials = await handleOAuthCallback(oauthCode, oauthState, getOAuthRedirectUri());
+            // Remove the ?code= and ?state= from the URL without triggering a page reload
             window.history.replaceState({}, document.title, window.location.pathname);
+            // Persist credentials in the encrypted cookie so the session survives a reload.
+            await persistLogin(credentials);
             sessionStorage.setItem('silver_sprint_auth', JSON.stringify(credentials));
             setAuth(credentials);
             setIsInitializing(false);
