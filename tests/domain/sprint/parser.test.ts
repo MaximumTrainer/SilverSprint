@@ -224,6 +224,19 @@ describe('SprintParser.fromAPIInterval — Intervals.icu /activity/{id}/interval
     expect(result).toBeNull();
   });
 
+  it('uses average_speed as vMax fallback when max_speed is zero', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 60,
+      moving_time: 7,
+      max_speed: 0,
+      average_speed: 8.7,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.vMax).toBe(8.7);
+    expect(result!.type).toBe('MaxVelocity');
+  });
+
   it('returns null when duration is zero', () => {
     const result = SprintParser.fromAPIInterval({
       type: 'WORK',
@@ -248,5 +261,62 @@ describe('SprintParser.fromAPIInterval — Intervals.icu /activity/{id}/interval
     });
     expect(result).not.toBeNull();
     expect(result!.flyingVelocity).toBe(0);
+  });
+
+  it('uses average_speed as vMax fallback when max_speed is absent', () => {
+    // Flying 60 with no max_speed in API response — average_speed should be used
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 60,
+      moving_time: 7,
+      average_speed: 8.5,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.vMax).toBe(8.5);
+    expect(result!.flyingVelocity).toBe(8.5);
+    expect(result!.type).toBe('MaxVelocity');
+  });
+
+  it('accepts a 400m interval (boundary — longest sprint event)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 400,
+      moving_time: 52,
+      max_speed: 9.0,
+      average_speed: 7.7,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(400);
+    expect(result!.type).toBe('SpecialEndurance');
+  });
+
+  it('excludes intervals longer than 400m', () => {
+    // 500m warm-up jog typed WORK — not a sprint interval
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 500,
+      moving_time: 120,
+      max_speed: 5.0,
+      average_speed: 4.2,
+    });
+    expect(result).toBeNull();
+  });
+});
+
+describe('SprintParser.parseTrackSession — 400m upper-distance filter', () => {
+  it('excludes velocity-stream bursts longer than 400m', () => {
+    // Simulate a 500m easy jog at 4 m/s for 125 seconds → distance ~500m
+    const stream = Array(125).fill(4.0);
+    const result = SprintParser.parseTrackSession({ velocity_smooth: stream });
+    expect(result).toEqual([]);
+  });
+
+  it('accepts a 400m velocity-stream burst at sprint pace', () => {
+    // 400m sprint: 44 seconds at 9 m/s → distance 396m ≤ 400m
+    const stream = Array(44).fill(9.0);
+    const result = SprintParser.parseTrackSession({ velocity_smooth: stream });
+    expect(result.length).toBe(1);
+    expect(result[0].type).toBe('SpecialEndurance');
+    expect(result[0].distance).toBeLessThanOrEqual(400);
   });
 });
