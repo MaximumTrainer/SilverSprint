@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { _buildRedirectUri, handleOAuthCallback } from '../../src/lib/oauth';
 
 // ── handleOAuthCallback — client_secret inclusion ────────────────────────────
@@ -17,6 +17,10 @@ describe('handleOAuthCallback', () => {
     });
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('includes client_secret in the token exchange request body', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -28,9 +32,7 @@ describe('handleOAuthCallback', () => {
 
     const [_url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = new URLSearchParams(init.body as string);
-    expect(body.get('client_secret')).toBe('88483f5cacba463ca1c1941dc7662ae1');
-
-    vi.unstubAllGlobals();
+    expect(body.has('client_secret')).toBe(true);
   });
 
   it('includes client_id in the token exchange request body', async () => {
@@ -45,8 +47,6 @@ describe('handleOAuthCallback', () => {
     const [_url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = new URLSearchParams(init.body as string);
     expect(body.get('client_id')).toBe('264');
-
-    vi.unstubAllGlobals();
   });
 });
 

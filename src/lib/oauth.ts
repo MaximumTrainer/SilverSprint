@@ -14,7 +14,7 @@
 import type { AuthCredentials } from './auth-storage';
 
 const OAUTH_CLIENT_ID = '264';
-const OAUTH_CLIENT_SECRET = '88483f5cacba463ca1c1941dc7662ae1';
+const OAUTH_CLIENT_SECRET = (import.meta.env.VITE_OAUTH_CLIENT_SECRET as string | undefined) ?? '';
 const OAUTH_AUTHORIZE_URL = 'https://intervals.icu/oauth/authorize';
 const OAUTH_TOKEN_URL = 'https://intervals.icu/api/oauth/token';
 const OAUTH_SCOPES = 'ACTIVITY:READ,WELLNESS:READ,SETTINGS:READ';
