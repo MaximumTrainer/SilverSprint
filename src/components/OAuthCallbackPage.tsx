@@ -80,9 +80,12 @@ export const OAuthCallbackPage: React.FC<OAuthCallbackPageProps> = ({ onLogin })
         clientLogger.error('OAuth callback handling failed', '', err);
         // Provide a specific, actionable message for the most common
         // misconfiguration: the server-side client_secret is missing from the build.
-        const message = raw.includes('client_secret') || raw.includes('not configured')
-          ? "OAuth sign-in is not configured: the OAuth client secret is missing. Set VITE_OAUTH_PROXY_URL (recommended) or VITE_OAUTH_CLIENT_SECRET as a GitHub repository secret and redeploy."
-          : raw;
+        const message =
+          raw.includes('client_secret') || raw.includes('not configured')
+            ? 'OAuth sign-in is not configured: the OAuth client secret is missing. Set VITE_OAUTH_PROXY_URL (recommended) or VITE_OAUTH_CLIENT_SECRET as a GitHub repository secret and redeploy.'
+            : raw.toLowerCase().includes('client') && raw.toLowerCase().includes('not found')
+            ? 'OAuth sign-in failed: the client ID or client secret is incorrect. Verify the VITE_OAUTH_CLIENT_SECRET value matches the secret shown in your Intervals.icu OAuth app settings (intervals.icu → Settings → Manage App).'
+            : raw;
         setState({ status: 'error', message });
       }
     };
