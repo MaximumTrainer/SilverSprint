@@ -124,19 +124,41 @@ export async function handleOAuthCallback(code: string, returnedState: string | 
     redirect_uri: redirectUri,
     code_verifier: codeVerifier,
   };
-  // Read and trim the secret lazily so its presence can be tested without
-  // re-importing the module. Only include it when non-empty — sending a blank
-  // value causes the token endpoint to return 404 "Client and/or secret not found".
-  const clientSecret = ((import.meta.env.VITE_OAUTH_CLIENT_SECRET as string | undefined) ?? '').trim();
-  if (clientSecret) {
-    bodyParams.client_secret = clientSecret;
-  }
-  const body = new URLSearchParams(bodyParams);
 
-  const response = await fetch(OAUTH_TOKEN_URL, {
+  // Prefer a server-side proxy URL (keeps client_secret off the browser).
+  // Fall back to a build-time VITE_OAUTH_CLIENT_SECRET for static deployments
+  // that cannot use a server-side proxy.
+  const proxyUrl = ((import.meta.env.VITE_OAUTH_PROXY_URL as string | undefined) ?? '').trim();
+  const clientSecret = ((import.meta.env.VITE_OAUTH_CLIENT_SECRET as string | undefined) ?? '').trim();
+
+  let tokenUrl: string;
+  let fetchBody: string;
+  let fetchHeaders: Record<string, string>;
+
+  if (proxyUrl) {
+    // Server-side proxy: send code + verifier; proxy adds client_secret.
+    tokenUrl = proxyUrl;
+    fetchBody = JSON.stringify({
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
+    });
+    fetchHeaders = { 'Content-Type': 'application/json' };
+  } else {
+    // Direct call: include client_secret in the browser request (only omit when
+    // blank — sending a blank value causes Intervals.icu to return 404).
+    if (clientSecret) {
+      bodyParams.client_secret = clientSecret;
+    }
+    tokenUrl = OAUTH_TOKEN_URL;
+    fetchBody = new URLSearchParams(bodyParams).toString();
+    fetchHeaders = { 'Content-Type': 'application/x-www-form-urlencoded' };
+  }
+
+  const response = await fetch(tokenUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
+    headers: fetchHeaders,
+    body: fetchBody,
   });
 
   if (!response.ok) {

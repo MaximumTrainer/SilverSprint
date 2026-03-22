@@ -24,6 +24,7 @@ jobs:
       - run: bun install
       - run: bun run build -- --base "${{ steps.pages.outputs.base_path }}/"
         env:
+          VITE_OAUTH_PROXY_URL: ${{ secrets.VITE_OAUTH_PROXY_URL }}
           VITE_OAUTH_CLIENT_SECRET: ${{ secrets.VITE_OAUTH_CLIENT_SECRET }}
       - uses: actions/upload-pages-artifact@v3
         with:
