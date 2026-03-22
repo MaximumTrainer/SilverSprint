@@ -12,16 +12,20 @@
        * original path and query string in sessionStorage and redirect to the app
        * root so the SPA can restore the URL and handle routing in JavaScript.
        *
-       * The app root is the first path segment (the GitHub Pages repository
-       * name) e.g. https://maximumtrainer.github.io/SilverSprint/
+       * On *.github.io hosts the first path segment is the GitHub Pages repository
+       * name (e.g. 'SilverSprint'), so the app root is /<repo>/.
+       * On custom domains (or any other host) there is no repo-name prefix, so
+       * the app root is the origin root (/), avoiding an infinite 404 loop that
+       * would occur if we mistakenly treated '/callback' as the repo name.
        */
       (function () {
         var loc = window.location;
         var parts = loc.pathname.split('/').filter(Boolean);
-        // parts[0] is the GitHub Pages repo name (e.g. 'SilverSprint').
-        // For a custom-domain deployment at the origin root, parts is empty.
+        // On *.github.io hosts, parts[0] is the GitHub Pages repo name (e.g. 'SilverSprint').
+        // On custom domains or other hosts, redirect to the origin root instead.
+        var isGitHubPagesHost = /\.github\.io$/i.test(loc.hostname);
         var root =
-          parts.length > 0
+          isGitHubPagesHost && parts.length > 0
             ? loc.origin + '/' + parts[0] + '/'
             : loc.origin + '/';
 

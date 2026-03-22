@@ -41,9 +41,17 @@ export const OAuthCallbackPage: React.FC<OAuthCallbackPageProps> = ({ onLogin })
 
       if (error) {
         clientLogger.warn(`OAuth authorization error: ${error}`, '');
-        const description = errorDescription
-          ? decodeURIComponent(errorDescription.replace(/\+/g, ' '))
-          : `Authorization failed: ${error}`;
+        let description: string;
+        if (errorDescription) {
+          try {
+            description = decodeURIComponent(errorDescription.replace(/\+/g, ' '));
+          } catch {
+            // Fall back to a safe, non-throwing representation if decoding fails.
+            description = errorDescription.replace(/\+/g, ' ');
+          }
+        } else {
+          description = `Authorization failed: ${error}`;
+        }
         setState({ status: 'error', message: description });
         return;
       }
