@@ -4,6 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SilverSprint</title>
+    <script>
+      /**
+       * Restore the original path/query saved by public/404.html so that
+       * path-based routing (e.g. /callback) works on GitHub Pages.
+       */
+      (function () {
+        var stored = sessionStorage.getItem('ss_redirect');
+        if (stored) {
+          sessionStorage.removeItem('ss_redirect');
+          try {
+            var r = JSON.parse(stored);
+            if (r && r.path) {
+              window.history.replaceState(
+                null,
+                '',
+                r.path + (r.search || '') + (r.hash || '')
+              );
+            }
+          } catch (_) {}
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

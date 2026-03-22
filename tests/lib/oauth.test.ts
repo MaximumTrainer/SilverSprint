@@ -4,12 +4,14 @@ import { _buildRedirectUri } from '../../src/lib/oauth';
 /**
  * Tests for the pure URL-building logic that powers getOAuthRedirectUri().
  *
- * getOAuthRedirectUri() delegates to _buildRedirectUri(BASE_URL, href) so
- * these tests fully cover the fix: resolving the Vite base path against the
- * full page href (not just the origin) so sub-path deployments like GitHub
- * Pages produce the correct redirect URI.
+ * getOAuthRedirectUri() now delegates to _buildRedirectUri('./callback', href)
+ * so the returned redirect URI always points to the dedicated /callback path.
+ * These tests verify both the original root-resolution behaviour (preserved for
+ * other callers) and the new callback-path resolution used in production.
  */
 describe('_buildRedirectUri', () => {
+  // ── existing root-path tests (BASE_URL = './') ───────────────────────────
+
   it('returns the sub-path root URL for a GitHub Pages deployment', () => {
     // BASE_URL = './' (vite base: './'), href = full GitHub Pages URL
     const uri = _buildRedirectUri('./', 'https://maximumtrainer.github.io/SilverSprint/');
@@ -41,5 +43,31 @@ describe('_buildRedirectUri', () => {
     const wrongUri = _buildRedirectUri('./', 'https://maximumtrainer.github.io');
     expect(wrongUri).toBe('https://maximumtrainer.github.io/');
     expect(wrongUri).not.toBe('https://maximumtrainer.github.io/SilverSprint/');
+  });
+
+  // ── callback path tests (getOAuthRedirectUri uses './callback') ───────────
+
+  it('appends /callback for a GitHub Pages sub-path deployment', () => {
+    const uri = _buildRedirectUri('./callback', 'https://maximumtrainer.github.io/SilverSprint/');
+    expect(uri).toBe('https://maximumtrainer.github.io/SilverSprint/callback');
+  });
+
+  it('appends /callback at the origin root', () => {
+    const uri = _buildRedirectUri('./callback', 'https://example.com/');
+    expect(uri).toBe('https://example.com/callback');
+  });
+
+  it('strips query params and still returns the clean /callback URI', () => {
+    // When the browser is already on the callback path (e.g. after the GitHub
+    // Pages 404.html redirect restores the path), getOAuthRedirectUri() must
+    // still produce the same clean URI used during the initial auth request.
+    const uri = _buildRedirectUri('./callback', 'https://maximumtrainer.github.io/SilverSprint/callback?code=abc&state=xyz');
+    expect(uri).toBe('https://maximumtrainer.github.io/SilverSprint/callback');
+  });
+
+  it('returns a consistent /callback URI whether called from root or callback path', () => {
+    const fromRoot = _buildRedirectUri('./callback', 'https://maximumtrainer.github.io/SilverSprint/');
+    const fromCallback = _buildRedirectUri('./callback', 'https://maximumtrainer.github.io/SilverSprint/callback?code=x&state=y');
+    expect(fromRoot).toBe(fromCallback);
   });
 });
