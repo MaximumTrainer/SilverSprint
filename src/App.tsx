@@ -1,20 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AuthGate } from './components/AuthGate';
+import { OAuthCallbackPage } from './components/OAuthCallbackPage';
 import { Dashboard, AthleteData } from './components/Dashboard';
 import { useIntervalsData } from './hooks/useIntervalsData';
 import { SprintWorkout } from './domain/sprint/workouts';
 import { clientLogger } from './logger';
 import { AlertCircle, Zap } from 'lucide-react';
 import { INTERVALS_BASE } from './config/api';
-import { AuthCredentials, buildAuthorizationHeader, loadPersistedLogin, clearAuthCookie, persistLogin } from './lib/auth-storage';
-import { handleOAuthCallback, getOAuthRedirectUri } from './lib/oauth';
+import { AuthCredentials, buildAuthorizationHeader, loadPersistedLogin, clearAuthCookie } from './lib/auth-storage';
 
 const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthCredentials | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
 
+  // Detect if the current URL is the dedicated OAuth callback path.
+  // Computed once on mount via useMemo — the path never changes without a navigation.
+  const isOAuthCallbackPath = useMemo(() => {
+    const callbackPathname = new URL('./callback', window.location.href).pathname;
+    return window.location.pathname === callbackPathname;
+  }, []);
+
   // 1. Check for existing session on mount (dev env vars take priority)
   useEffect(() => {
+    // OAuth callback path is handled entirely by OAuthCallbackPage.
+    if (isOAuthCallbackPath) {
+      setIsInitializing(false);
+      return;
+    }
+
     const initAuth = async () => {
       const devAthleteId = import.meta.env.INTERVALS_ATHLETE_ID;
       const devApiKey = import.meta.env.INTERVALS_API_KEY;
@@ -22,39 +35,7 @@ const App: React.FC = () => {
       if (import.meta.env.DEV && devAthleteId && devApiKey) {
         setAuth({ athleteId: devAthleteId, accessToken: devApiKey, authType: 'basic' });
       } else {
-        // 1a. Handle OAuth 2.0 callback: check for ?code= or ?error= in the URL
-        const params = new URLSearchParams(window.location.search);
-        const oauthCode = params.get('code');
-        const oauthState = params.get('state');
-        const oauthError = params.get('error');
-
-        if (oauthError) {
-          // Authorization server reported an error (e.g. access_denied).
-          // Log only the stable error code, not the server-provided description which
-          // could contain untrusted content from the redirect URL.
-          clientLogger.warn(`OAuth authorization error: ${oauthError}`, '');
-          window.history.replaceState({}, document.title, window.location.pathname);
-          // Fall through to the normal login/session flow.
-        } else if (oauthCode) {
-          try {
-            clientLogger.info('Handling OAuth callback', '');
-            const credentials = await handleOAuthCallback(oauthCode, oauthState, getOAuthRedirectUri());
-            // Remove the ?code= and ?state= from the URL without triggering a page reload
-            window.history.replaceState({}, document.title, window.location.pathname);
-            // Persist credentials in the encrypted cookie so the session survives a reload.
-            await persistLogin(credentials);
-            sessionStorage.setItem('silver_sprint_auth', JSON.stringify(credentials));
-            setAuth(credentials);
-            setIsInitializing(false);
-            return;
-          } catch (err) {
-            clientLogger.error('OAuth callback handling failed', '', err);
-            // Fall through to normal login flow
-            window.history.replaceState({}, document.title, window.location.pathname);
-          }
-        }
-
-        // 1b. Current-tab sessionStorage takes priority
+        // 1a. Current-tab sessionStorage takes priority
         const savedAuth = sessionStorage.getItem('silver_sprint_auth');
         if (savedAuth) {
           try {
@@ -78,7 +59,7 @@ const App: React.FC = () => {
             sessionStorage.removeItem('silver_sprint_auth');
           }
         }
-        // 1c. Fall back to the persistent encrypted cookie (cross-session)
+        // 1b. Fall back to the persistent encrypted cookie (cross-session)
         const persisted = await loadPersistedLogin();
         if (persisted) {
           sessionStorage.setItem('silver_sprint_auth', JSON.stringify(persisted));
@@ -89,7 +70,7 @@ const App: React.FC = () => {
     };
 
     initAuth();
-  }, []);
+  }, [isOAuthCallbackPath]);
 
   // 2. Fetch data using our custom hook
   const {
@@ -182,12 +163,17 @@ const App: React.FC = () => {
 
   if (isInitializing) return null; // Prevent flicker
 
-  // 3. Render Login if no auth
+  // 3. Render the OAuth callback page when on the dedicated /callback path
+  if (isOAuthCallbackPath) {
+    return <OAuthCallbackPage onLogin={(creds) => setAuth(creds)} />;
+  }
+
+  // 4. Render Login if no auth
   if (!auth) {
     return <AuthGate onLogin={(creds) => setAuth(creds)} />;
   }
 
-  // 4. Render Loading State
+  // 5. Render Loading State
   if (loading) {
     return (
       <div

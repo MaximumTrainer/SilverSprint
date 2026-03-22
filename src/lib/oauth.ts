@@ -166,14 +166,13 @@ export async function handleOAuthCallback(code: string, returnedState: string | 
 }
 
 /**
- * Build the OAuth redirect URI from the app's Vite base path and the current
- * page URL.
+ * Build a URL from a relative `base` resolved against `href`.
  *
- * Resolving a relative `base` (e.g. `./`) against the full `href` (rather than
- * just the origin) correctly handles sub-path deployments like GitHub Pages.
- * Any query-string parameters in `href` (e.g. `?code=…` during an OAuth
- * callback) are stripped automatically by the relative URL resolution so the
- * returned URI is always the same clean path.
+ * Resolving a relative path (e.g. `./callback`) against the full `href`
+ * (rather than just the origin) correctly handles sub-path deployments like
+ * GitHub Pages.  Any query-string parameters in `href` (e.g. `?code=…` during
+ * an OAuth callback) are stripped automatically by the relative URL resolution
+ * so the returned URI is always the same clean path.
  *
  * @internal Exported for unit testing only — prefer {@link getOAuthRedirectUri}
  *   in application code.
@@ -183,10 +182,24 @@ export function _buildRedirectUri(base: string, href: string): string {
 }
 
 /**
- * Return the redirect URI for the current deployment, including the app base
- * path so it works both at the origin root and from sub-paths like GitHub Pages
- * (e.g. https://maximumtrainer.github.io/SilverSprint/).
+ * Return the dedicated OAuth callback URI for the current deployment.
+ *
+ * The callback is served at `<app-root>/callback` so that it can be
+ * registered as a distinct redirect URL in the Intervals.icu OAuth settings
+ * (separate from the main application URL).
+ *
+ * The URI is built by resolving `./callback` against the current page URL,
+ * which correctly handles both root deployments (e.g. `https://example.com/callback`)
+ * and sub-path deployments like GitHub Pages
+ * (e.g. `https://maximumtrainer.github.io/SilverSprint/callback`).
+ *
+ * Override via the `VITE_OAUTH_REDIRECT_URI` environment variable when a
+ * custom redirect URI is needed (e.g. for self-hosted or custom-domain
+ * deployments).
  */
 export function getOAuthRedirectUri(): string {
-  return _buildRedirectUri(import.meta.env.BASE_URL ?? '/', window.location.href);
+  if (import.meta.env.VITE_OAUTH_REDIRECT_URI) {
+    return import.meta.env.VITE_OAUTH_REDIRECT_URI as string;
+  }
+  return _buildRedirectUri('./callback', window.location.href);
 }

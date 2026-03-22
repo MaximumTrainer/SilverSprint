@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SilverSprint</title>
+    <script>
+      /**
+       * GitHub Pages SPA routing redirect.
+       *
+       * GitHub Pages returns this 404.html for any path that does not correspond
+       * to a physical file (e.g. /SilverSprint/callback).  We preserve the
+       * original path and query string in sessionStorage and redirect to the app
+       * root so the SPA can restore the URL and handle routing in JavaScript.
+       *
+       * The app root is the first path segment (the GitHub Pages repository
+       * name) e.g. https://maximumtrainer.github.io/SilverSprint/
+       */
+      (function () {
+        var loc = window.location;
+        var parts = loc.pathname.split('/').filter(Boolean);
+        // parts[0] is the GitHub Pages repo name (e.g. 'SilverSprint').
+        // For a custom-domain deployment at the origin root, parts is empty.
+        var root =
+          parts.length > 0
+            ? loc.origin + '/' + parts[0] + '/'
+            : loc.origin + '/';
+
+        sessionStorage.setItem(
+          'ss_redirect',
+          JSON.stringify({
+            path: loc.pathname,
+            search: loc.search,
+            hash: loc.hash,
+          })
+        );
+
+        loc.replace(root);
+      })();
+    </script>
+  </head>
+  <body></body>
+</html>
