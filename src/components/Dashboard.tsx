@@ -321,7 +321,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               {strengthZone}
             </div>
             <div style={{ fontSize: 11, color: 'var(--icu-text-disabled)', marginTop: 2 }}>
-              TSB {athleteData.tsb > 0 ? '+' : ''}{athleteData.tsb} · {strengthZoneLabel}
+              TSB {athleteData.tsb > 0 ? '+' : ''}{athleteData.tsb.toFixed(2)} · {strengthZoneLabel}
             </div>
           </div>
 
