@@ -14,7 +14,6 @@
 import type { AuthCredentials } from './auth-storage';
 
 const OAUTH_CLIENT_ID = '264';
-const OAUTH_CLIENT_SECRET = (import.meta.env.VITE_OAUTH_CLIENT_SECRET as string | undefined) ?? '';
 const OAUTH_AUTHORIZE_URL = 'https://intervals.icu/oauth/authorize';
 const OAUTH_TOKEN_URL = 'https://intervals.icu/api/oauth/token';
 const OAUTH_SCOPES = 'ACTIVITY:READ,WELLNESS:READ,SETTINGS:READ';
@@ -118,14 +117,21 @@ export async function handleOAuthCallback(code: string, returnedState: string | 
     throw new Error('OAuth state mismatch — possible CSRF attack. Please try signing in again.');
   }
 
-  const body = new URLSearchParams({
+  const bodyParams: Record<string, string> = {
     grant_type: 'authorization_code',
     code,
     client_id: OAUTH_CLIENT_ID,
-    client_secret: OAUTH_CLIENT_SECRET,
     redirect_uri: redirectUri,
     code_verifier: codeVerifier,
-  });
+  };
+  // Read and trim the secret lazily so its presence can be tested without
+  // re-importing the module. Only include it when non-empty — sending a blank
+  // value causes the token endpoint to return 404 "Client and/or secret not found".
+  const clientSecret = ((import.meta.env.VITE_OAUTH_CLIENT_SECRET as string | undefined) ?? '').trim();
+  if (clientSecret) {
+    bodyParams.client_secret = clientSecret;
+  }
+  const body = new URLSearchParams(bodyParams);
 
   const response = await fetch(OAUTH_TOKEN_URL, {
     method: 'POST',
