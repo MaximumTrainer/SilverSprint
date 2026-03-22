@@ -7,9 +7,11 @@ import { StrengthPeriodization } from '../domain/sprint/periodization';
 import { SprintWorkoutGenerator, SprintWorkout, isStaleVmax } from '../domain/sprint/workouts';
 import { RaceEstimate } from '../domain/sprint/race-estimator';
 import { SprintRacePlan, PriorRaceContext } from '../domain/sprint/race-plan';
+import type { TrainingPlanContext } from '../domain/sprint/training-plan';
 import { TimeSeriesChart } from './TimeSeriesChart';
 import type { DailyDataPoint } from '../domain/types';
 import { SpringTrainingPanel } from './SpringTrainingPanel';
+import { TrainingPlanPanel } from './TrainingPlanPanel';
 
 export interface AthleteData {
   name: string;
@@ -33,6 +35,8 @@ interface DashboardProps {
   /** Predicted times at green neural readiness. Empty when already green. */
   recoveredEstimates: RaceEstimate[];
   sprintRacePlans: SprintRacePlan[];
+  /** 12-week training plan context, present when a race is within 84 days */
+  trainingPlan: TrainingPlanContext | null;
   onLogout: () => void;
   onPushWorkout: (workout: SprintWorkout, date: string) => Promise<boolean>;
   onPushSession: (sessionName: string, raceName: string, date: string) => Promise<boolean>;
@@ -189,6 +193,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   raceEstimates,
   recoveredEstimates,
   sprintRacePlans,
+  trainingPlan,
   onLogout,
   onPushWorkout,
   onPushSession,
@@ -887,6 +892,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
             })}
           </div>
         </div>
+
+        {/* ── 12-Week Training Plan ────────────────────────── */}
+        {trainingPlan && (
+          <TrainingPlanPanel
+            context={trainingPlan}
+            onPushWorkout={onPushWorkout}
+          />
+        )}
 
         {/* ── Spring Training — Fascia Module ──────────────── */}
         <SpringTrainingPanel />

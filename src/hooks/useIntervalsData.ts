@@ -3,6 +3,7 @@ import { SprintParser, TrackInterval } from '../domain/sprint/parser';
 import { SilverSprintLogic, HRVData, NFIStatus } from '../domain/sprint/core';
 import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../domain/sprint/race-estimator';
 import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sprint/race-plan';
+import { SprintTrainingPlan, TrainingPlanContext } from '../domain/sprint/training-plan';
 import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsEventSchema, IntervalsAthleteSchema, IntervalsIntervalSchema, IntervalsActivity, IntervalsWellness, IntervalsEvent } from '../domain/schema';
 import { buildAuthorizationHeader } from '../lib/auth-storage';
 import { clientLogger } from '../logger';
@@ -31,6 +32,8 @@ export interface IntervalsDataState {
   /** Predicted times if athlete were fully recovered (green NFI). Only populated when nfiStatus is amber/red. */
   recoveredEstimates: RaceEstimate[];
   sprintRacePlans: SprintRacePlan[];
+  /** 12-week training plan context, present when a race event is within 84 days */
+  trainingPlan: TrainingPlanContext | null;
   loading: boolean;
   error: string | null;
 }
@@ -64,6 +67,7 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
     raceEstimates: [],
     recoveredEstimates: [],
     sprintRacePlans: [],
+    trainingPlan: null,
     loading: true,
     error: null,
   });
@@ -289,6 +293,7 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
         const futureDate = getDateDaysAhead(RACE_LOOKAHEAD_DAYS);
         const todayDate = getDateDaysAgo(0);
         let sprintRacePlans: SprintRacePlan[] = [];
+        let trainingPlan: TrainingPlanContext | null = null;
         try {
           clientLogger.info('Fetching upcoming race events', athleteId);
           // Race categories are RACE_A, RACE_B, RACE_C in Intervals.icu
@@ -335,6 +340,22 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
 
             sprintRacePlans = SprintRacePlanner.buildMultiRacePlans(raceEvents, bestVmax60d, 45);
 
+            // Build 12-week training plan context from nearest event within the plan window
+            if (raceEvents.length > 0) {
+              const nearest = raceEvents[0];
+              trainingPlan = SprintTrainingPlan.buildContext(
+                nearest.daysUntil,
+                nearest.name,
+                nearest.distanceM,
+                nfiStatus,
+                currentNFI,
+                tsb,
+              );
+              if (trainingPlan) {
+                clientLogger.info(`Training plan: Week ${trainingPlan.planWeek}/12 — ${trainingPlan.phaseName} — ${trainingPlan.todaySpec.label}`, athleteId);
+              }
+            }
+
             clientLogger.info(`Found ${sprintRacePlans.length} upcoming sprint race(s)`, athleteId);
           } else {
             clientLogger.warn(`Events fetch failed — HTTP ${eventsRes.status}`, athleteId);
@@ -362,6 +383,7 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
           raceEstimates,
           recoveredEstimates,
           sprintRacePlans,
+          trainingPlan,
           loading: false,
           error: null,
         });
