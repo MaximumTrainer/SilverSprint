@@ -118,14 +118,19 @@ export async function handleOAuthCallback(code: string, returnedState: string | 
     throw new Error('OAuth state mismatch — possible CSRF attack. Please try signing in again.');
   }
 
-  const body = new URLSearchParams({
+  const bodyParams: Record<string, string> = {
     grant_type: 'authorization_code',
     code,
     client_id: OAUTH_CLIENT_ID,
-    client_secret: OAUTH_CLIENT_SECRET,
     redirect_uri: redirectUri,
     code_verifier: codeVerifier,
-  });
+  };
+  // Only include client_secret when it is configured; sending an empty value
+  // causes the token endpoint to return 404 "Client and/or secret not found".
+  if (OAUTH_CLIENT_SECRET) {
+    bodyParams.client_secret = OAUTH_CLIENT_SECRET;
+  }
+  const body = new URLSearchParams(bodyParams);
 
   const response = await fetch(OAUTH_TOKEN_URL, {
     method: 'POST',
