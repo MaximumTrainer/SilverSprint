@@ -19,12 +19,13 @@ describe('handleOAuthCallback', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it('omits client_secret from the token exchange request when VITE_OAUTH_CLIENT_SECRET is not configured', async () => {
-    // In the test environment VITE_OAUTH_CLIENT_SECRET is undefined/empty, so
-    // the field must be omitted entirely — sending an empty value causes the
-    // Intervals.icu token endpoint to return HTTP 404 "Client and/or secret not found".
+    // Explicitly clear the env var so the test is deterministic regardless of
+    // whether the developer's environment has it set.
+    vi.stubEnv('VITE_OAUTH_CLIENT_SECRET', '');
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ access_token: 'tok', athlete: { id: 'i123' } }),
@@ -38,7 +39,40 @@ describe('handleOAuthCallback', () => {
     expect(body.has('client_secret')).toBe(false);
   });
 
+  it('omits client_secret when VITE_OAUTH_CLIENT_SECRET is set to only whitespace', async () => {
+    // Whitespace-only values must be treated as unconfigured to prevent the
+    // token endpoint from receiving a blank (but non-empty) client_secret.
+    vi.stubEnv('VITE_OAUTH_CLIENT_SECRET', '   ');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ access_token: 'tok', athlete: { id: 'i123' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await handleOAuthCallback('auth-code', 'test-state', 'https://example.com/callback');
+
+    const [_url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = new URLSearchParams(init.body as string);
+    expect(body.has('client_secret')).toBe(false);
+  });
+
+  it('includes client_secret in the token exchange request body when VITE_OAUTH_CLIENT_SECRET is configured', async () => {
+    vi.stubEnv('VITE_OAUTH_CLIENT_SECRET', 'test-secret');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ access_token: 'tok', athlete: { id: 'i123' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await handleOAuthCallback('auth-code', 'test-state', 'https://example.com/callback');
+
+    const [_url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = new URLSearchParams(init.body as string);
+    expect(body.get('client_secret')).toBe('test-secret');
+  });
+
   it('includes client_id in the token exchange request body', async () => {
+    vi.stubEnv('VITE_OAUTH_CLIENT_SECRET', '');
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ access_token: 'tok', athlete: { id: 'i123' } }),

@@ -14,7 +14,6 @@
 import type { AuthCredentials } from './auth-storage';
 
 const OAUTH_CLIENT_ID = '264';
-const OAUTH_CLIENT_SECRET = (import.meta.env.VITE_OAUTH_CLIENT_SECRET as string | undefined) ?? '';
 const OAUTH_AUTHORIZE_URL = 'https://intervals.icu/oauth/authorize';
 const OAUTH_TOKEN_URL = 'https://intervals.icu/api/oauth/token';
 const OAUTH_SCOPES = 'ACTIVITY:READ,WELLNESS:READ,SETTINGS:READ';
@@ -125,10 +124,12 @@ export async function handleOAuthCallback(code: string, returnedState: string | 
     redirect_uri: redirectUri,
     code_verifier: codeVerifier,
   };
-  // Only include client_secret when it is configured; sending an empty value
-  // causes the token endpoint to return 404 "Client and/or secret not found".
-  if (OAUTH_CLIENT_SECRET) {
-    bodyParams.client_secret = OAUTH_CLIENT_SECRET;
+  // Read and trim the secret lazily so its presence can be tested without
+  // re-importing the module. Only include it when non-empty — sending a blank
+  // value causes the token endpoint to return 404 "Client and/or secret not found".
+  const clientSecret = ((import.meta.env.VITE_OAUTH_CLIENT_SECRET as string | undefined) ?? '').trim();
+  if (clientSecret) {
+    bodyParams.client_secret = clientSecret;
   }
   const body = new URLSearchParams(bodyParams);
 
