@@ -11,16 +11,20 @@ export interface TrackInterval {
  * §2.1 / §3.1 — Sprint Parser Engine
  *
  * A 1Hz velocity stream analyzer that identifies:
- *   - Acceleration (0–30m): Slope from V < 1m/s to V_peak
- *   - MaxVelocity / Flying 10s/30s: Peak velocity maintained over a 10m–30m window
- *   - Speed Endurance: Velocity maintenance in intervals > 80m
- *   - Special Endurance: Intervals > 150m
+ *   - Acceleration (0–40m): Slope from V < 1m/s to V_peak
+ *   - MaxVelocity / Flying 10s/60s: Peak velocity maintained over a 40m–80m window
+ *   - Speed Endurance: Velocity maintenance in intervals 80m–150m
+ *   - Special Endurance: Intervals 150m–400m
+ *
+ * Only sprint-range efforts (≥ 10m and ≤ 400m) are included.
  */
 export class SprintParser {
   /** Minimum velocity to consider as "moving" within a rep */
   private static readonly MOVING_THRESHOLD = 1.0; // m/s — spec: V < 1 m/s is standing
   /** Minimum distance to count as a valid rep */
   private static readonly MIN_REP_DISTANCE = 10; // metres
+  /** Maximum distance to count as a sprint interval — 400m is the longest sprint event */
+  private static readonly MAX_SPRINT_DISTANCE = 400; // metres
   /** Interval types from the Intervals.icu API that represent active sprint work */
   private static readonly WORK_INTERVAL_TYPES = ['WORK', 'ACTIVE'] as const;
 
@@ -58,7 +62,7 @@ export class SprintParser {
     // Total distance = sum of all velocities × 1s
     const distance = burst.reduce((sum, v) => sum + v, 0);
 
-    if (distance < this.MIN_REP_DISTANCE) {
+    if (distance < this.MIN_REP_DISTANCE || distance > this.MAX_SPRINT_DISTANCE) {
       return null;
     }
 
@@ -93,9 +97,10 @@ export class SprintParser {
    * Convert a single interval from the Intervals.icu
    * GET /api/v1/activity/{id}/intervals API response into a TrackInterval.
    *
-   * Returns null if the interval lacks sufficient data (too short, no speed, etc.).
+   * Returns null if the interval lacks sufficient data (too short, too long, no speed, etc.).
    * Only WORK-type intervals (or intervals with no type) are included so that
    * rest / warm-up segments are automatically excluded.
+   * Only sprint-range intervals (≥ 10m and ≤ 400m) are included.
    */
   public static fromAPIInterval(interval: {
     distance?: number;
@@ -112,10 +117,12 @@ export class SprintParser {
 
     const distance = interval.distance ?? 0;
     const duration = interval.moving_time ?? interval.elapsed_time ?? 0;
-    const vMax = interval.max_speed ?? 0;
+    // Prefer max_speed; fall back to average_speed when max_speed is absent or zero
+    // (some devices / Intervals.icu workouts omit peak-speed data for intervals)
+    const vMax = interval.max_speed || interval.average_speed || 0;
     const flyingVelocity = interval.average_speed ?? 0;
 
-    if (distance < this.MIN_REP_DISTANCE || duration <= 0 || vMax <= 0) {
+    if (distance < this.MIN_REP_DISTANCE || distance > this.MAX_SPRINT_DISTANCE || duration <= 0 || vMax <= 0) {
       return null;
     }
 
