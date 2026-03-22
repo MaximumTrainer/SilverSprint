@@ -25,8 +25,20 @@ export class SprintParser {
   private static readonly MIN_REP_DISTANCE = 10; // metres
   /** Maximum distance to count as a sprint interval — 400m is the longest sprint event */
   private static readonly MAX_SPRINT_DISTANCE = 400; // metres
-  /** Interval types from the Intervals.icu API that represent active sprint work */
-  private static readonly WORK_INTERVAL_TYPES = ['WORK', 'ACTIVE'] as const;
+  /**
+   * Interval types from the Intervals.icu API that represent rest/recovery.
+   * All OTHER types (WORK, ACTIVE, INTERVAL, LAP, etc.) are accepted so that
+   * both structured workout intervals AND auto-detected efforts are included.
+   */
+  private static readonly REST_INTERVAL_TYPES = ['REST', 'ACTIVE_REST', 'WARMUP', 'COOLDOWN', 'RECOVERY'] as const;
+
+  /**
+   * Minimum average speed (m/s) to be considered a sprint effort.
+   * Filters out rest periods that are labelled WORK by Intervals.icu
+   * (e.g. 300-second walk-back recovery intervals with avg 0.2–0.6 m/s).
+   * Even a standing-start 10 m sprint has an average speed > 4 m/s.
+   */
+  private static readonly MIN_SPRINT_AVG_SPEED = 4.0; // m/s ≈ 14.4 km/h
 
   /**
    * Parse a full session's velocity_smooth stream into classified intervals.
@@ -110,8 +122,8 @@ export class SprintParser {
     max_speed?: number;
     type?: string;
   }): TrackInterval | null {
-    // Exclude explicit non-work segments
-    if (interval.type && !(this.WORK_INTERVAL_TYPES as readonly string[]).includes(interval.type)) {
+    // Exclude explicit rest/recovery segments; accept everything else (WORK, ACTIVE, INTERVAL, LAP, etc.)
+    if (interval.type && (this.REST_INTERVAL_TYPES as readonly string[]).includes(interval.type)) {
       return null;
     }
 
@@ -123,6 +135,14 @@ export class SprintParser {
     const flyingVelocity = interval.average_speed ?? 0;
 
     if (distance < this.MIN_REP_DISTANCE || distance > this.MAX_SPRINT_DISTANCE || duration <= 0 || vMax <= 0) {
+      return null;
+    }
+
+    // Reject rest periods that Intervals.icu labels as WORK: they have very low
+    // average speed (e.g. 0.2–0.6 m/s walk-back) even though max_speed may be
+    // non-zero (residual from the preceding sprint). Any real sprint effort —
+    // even a short standing-start — produces an average speed above this floor.
+    if (flyingVelocity > 0 && flyingVelocity < this.MIN_SPRINT_AVG_SPEED) {
       return null;
     }
 

@@ -61,7 +61,9 @@ export const IntervalsIntervalSchema = z.object({
   max_speed: z.number().optional(),
   /** Interval type e.g. "WORK", "REST", "ACTIVE_REST", "WARMUP", "COOLDOWN" */
   type: z.string().optional(),
-  /** Training load contribution of this interval (from Intervals.icu) */
+  /** Training load contribution of this interval (from Intervals.icu, field name: training_load) */
+  training_load: z.number().optional(),
+  /** Legacy alias — kept for backward compatibility with older API responses */
   icu_training_load: z.number().optional(),
 });
 

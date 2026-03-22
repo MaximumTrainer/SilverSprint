@@ -301,6 +301,67 @@ describe('SprintParser.fromAPIInterval — Intervals.icu /activity/{id}/interval
     });
     expect(result).toBeNull();
   });
+
+  it('excludes RECOVERY intervals', () => {
+    // Intervals.icu marks short bounce-back jogs as RECOVERY
+    const result = SprintParser.fromAPIInterval({
+      type: 'RECOVERY',
+      distance: 7.5,
+      moving_time: 1,
+      max_speed: 7.5,
+      average_speed: 7.5,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('accepts INTERVAL-typed intervals (Intervals.icu auto-detected efforts)', () => {
+    // Auto-detected sprint segments have type 'INTERVAL', not 'WORK'
+    const result = SprintParser.fromAPIInterval({
+      type: 'INTERVAL',
+      distance: 60,
+      moving_time: 8,
+      max_speed: 8.2,
+      average_speed: 7.5,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('MaxVelocity');
+  });
+
+  it('accepts LAP-typed intervals', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'LAP',
+      distance: 100,
+      moving_time: 12,
+      max_speed: 9.0,
+      average_speed: 8.3,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('SpeedEndurance');
+  });
+
+  it('rejects a WORK-labeled rest period with low average speed', () => {
+    // Intervals.icu sometimes labels the walk-back recovery as WORK.
+    // 63m over 300 seconds (0.21 m/s average) — clearly not a sprint.
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 63,
+      moving_time: 300,
+      max_speed: 6.1,       // residual max_speed from preceding sprint
+      average_speed: 0.21,  // but average is walking pace
+    });
+    expect(result).toBeNull();
+  });
+
+  it('accepts a WORK interval without average_speed (speed-only device)', () => {
+    // When average_speed is absent the minimum-speed check is skipped
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 40,
+      moving_time: 5,
+      max_speed: 8.0,
+    });
+    expect(result).not.toBeNull();
+  });
 });
 
 describe('SprintParser.parseTrackSession — 400m upper-distance filter', () => {

@@ -217,16 +217,20 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
             );
             if (!res.ok) return { intervals: [] as TrackInterval[], totalLoad: 0 };
             const raw = await res.json();
-            if (!Array.isArray(raw)) return { intervals: [] as TrackInterval[], totalLoad: 0 };
+            // The /intervals endpoint returns { icu_intervals: [...], icu_groups: [...] },
+            // NOT a bare array. Fall back to the root itself in case the API shape changes.
+            const rawIntervals: unknown[] = Array.isArray(raw?.icu_intervals)
+              ? raw.icu_intervals
+              : Array.isArray(raw) ? raw : [];
+            if (rawIntervals.length === 0) return { intervals: [] as TrackInterval[], totalLoad: 0 };
 
             let totalLoad = 0;
             const intervals: TrackInterval[] = [];
-            for (const item of raw) {
+            for (const item of rawIntervals) {
               const parsed = IntervalsIntervalSchema.safeParse(item);
               if (!parsed.success) continue;
-              // Sum icu_training_load from ALL interval types (not just WORK/ACTIVE)
-              // so that non-sprint load (warmup, cooldown, rest) feeds into recovery.
-              totalLoad += parsed.data.icu_training_load ?? 0;
+              // Sum training_load from ALL interval types so that non-sprint load feeds into recovery.
+              totalLoad += parsed.data.training_load ?? 0;
               const interval = SprintParser.fromAPIInterval(parsed.data);
               if (interval) intervals.push(interval);
             }
