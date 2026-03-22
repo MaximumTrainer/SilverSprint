@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { _buildRedirectUri } from '../../src/lib/oauth';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { _buildRedirectUri, getOAuthRedirectUri } from '../../src/lib/oauth';
 
 /**
  * Tests for the pure URL-building logic that powers getOAuthRedirectUri().
@@ -41,5 +41,40 @@ describe('_buildRedirectUri', () => {
     const wrongUri = _buildRedirectUri('./', 'https://maximumtrainer.github.io');
     expect(wrongUri).toBe('https://maximumtrainer.github.io/');
     expect(wrongUri).not.toBe('https://maximumtrainer.github.io/SilverSprint/');
+  });
+});
+
+/**
+ * Tests for the VITE_OAUTH_REDIRECT_URI explicit override in getOAuthRedirectUri().
+ *
+ * When VITE_OAUTH_REDIRECT_URI is set, getOAuthRedirectUri() must return it
+ * verbatim so that the URI sent to intervals.icu exactly matches the URI
+ * registered for client_id 264 — even on deployments (Vercel, local dev,
+ * custom domains) where the dynamically-resolved URI would differ.
+ */
+describe('getOAuthRedirectUri with VITE_OAUTH_REDIRECT_URI override', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns the explicit override when VITE_OAUTH_REDIRECT_URI is set', () => {
+    vi.stubEnv('VITE_OAUTH_REDIRECT_URI', 'https://maximumtrainer.github.io/SilverSprint/');
+    const uri = getOAuthRedirectUri();
+    expect(uri).toBe('https://maximumtrainer.github.io/SilverSprint/');
+  });
+
+  it('returns override verbatim without trailing-slash normalisation', () => {
+    vi.stubEnv('VITE_OAUTH_REDIRECT_URI', 'https://example.com/oauth/callback');
+    const uri = getOAuthRedirectUri();
+    expect(uri).toBe('https://example.com/oauth/callback');
+  });
+
+  it('prefers the override over the dynamically-built URI', () => {
+    // Even if window.location.href would produce a different URI, the explicit
+    // override must win — ensuring an exact match with the registered URI.
+    vi.stubEnv('VITE_OAUTH_REDIRECT_URI', 'https://maximumtrainer.github.io/SilverSprint/');
+    const uri = getOAuthRedirectUri();
+    expect(uri).not.toBe('http://localhost/'); // dynamic would give localhost in tests
+    expect(uri).toBe('https://maximumtrainer.github.io/SilverSprint/');
   });
 });

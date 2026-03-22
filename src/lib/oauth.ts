@@ -186,7 +186,19 @@ export function _buildRedirectUri(base: string, href: string): string {
  * Return the redirect URI for the current deployment, including the app base
  * path so it works both at the origin root and from sub-paths like GitHub Pages
  * (e.g. https://maximumtrainer.github.io/SilverSprint/).
+ *
+ * The URI can be overridden by setting the `VITE_OAUTH_REDIRECT_URI` environment
+ * variable to the exact URI registered for this app in intervals.icu.  This is
+ * the recommended approach for Vercel, custom-domain, or local-development
+ * deployments where the dynamically-resolved URI might differ from the
+ * registered one.
+ *
+ * If the variable is not set, the URI is derived from the Vite base path and
+ * the current page URL, which is correct for the GitHub Pages deployment at
+ * https://maximumtrainer.github.io/SilverSprint/.
  */
 export function getOAuthRedirectUri(): string {
+  const explicit = import.meta.env.VITE_OAUTH_REDIRECT_URI as string | undefined;
+  if (explicit) return explicit;
   return _buildRedirectUri(import.meta.env.BASE_URL ?? '/', window.location.href);
 }
