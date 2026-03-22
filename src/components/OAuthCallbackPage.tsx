@@ -76,8 +76,13 @@ export const OAuthCallbackPage: React.FC<OAuthCallbackPageProps> = ({ onLogin })
           window.location.replace(new URL('./', window.location.href).toString());
         }, 1500);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error during sign-in.';
+        const raw = err instanceof Error ? err.message : 'Unknown error during sign-in.';
         clientLogger.error('OAuth callback handling failed', '', err);
+        // Provide a specific, actionable message for the most common
+        // misconfiguration: the server-side client_secret is missing from the build.
+        const message = raw.includes('client_secret')
+          ? "OAuth sign-in is not configured: the OAuth client secret is missing from this deployment. If you're the site owner, add VITE_OAUTH_CLIENT_SECRET as a GitHub repository secret and redeploy."
+          : raw;
         setState({ status: 'error', message });
       }
     };
