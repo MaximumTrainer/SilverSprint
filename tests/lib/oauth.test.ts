@@ -1,5 +1,56 @@
-import { describe, it, expect } from 'vitest';
-import { _buildRedirectUri } from '../../src/lib/oauth';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { _buildRedirectUri, handleOAuthCallback } from '../../src/lib/oauth';
+
+// ── handleOAuthCallback — client_secret inclusion ────────────────────────────
+
+describe('handleOAuthCallback', () => {
+  beforeEach(() => {
+    // Stub sessionStorage with the values that handleOAuthCallback reads.
+    const store: Record<string, string> = {
+      ss_pkce_verifier: 'test-verifier',
+      ss_oauth_state: 'test-state',
+    };
+    vi.stubGlobal('sessionStorage', {
+      getItem: (key: string) => store[key] ?? null,
+      removeItem: (key: string) => { delete store[key]; },
+      setItem: (key: string, value: string) => { store[key] = value; },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('includes client_secret in the token exchange request body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ access_token: 'tok', athlete: { id: 'i123' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await handleOAuthCallback('auth-code', 'test-state', 'https://example.com/callback');
+
+    const [_url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = new URLSearchParams(init.body as string);
+    expect(body.has('client_secret')).toBe(true);
+  });
+
+  it('includes client_id in the token exchange request body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ access_token: 'tok', athlete: { id: 'i123' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await handleOAuthCallback('auth-code', 'test-state', 'https://example.com/callback');
+
+    const [_url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = new URLSearchParams(init.body as string);
+    expect(body.get('client_id')).toBe('264');
+  });
+});
+
+
 
 /**
  * Tests for the pure URL-building logic that powers getOAuthRedirectUri().
