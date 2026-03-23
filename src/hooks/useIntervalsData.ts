@@ -154,11 +154,8 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
           ?? wellnessEntries.find((w) => typeof w.weight === 'number' && w.weight > 0)?.weight
           ?? null;
 
-        // 3. Parse Latest Session for Sprint Metrics
+        // 3. Select latest session/activity for sprint metrics
         const latestSession = activities[0];
-        const parsedIntervals = latestSession
-          ? SprintParser.parseTrackSession(latestSession)
-          : [];
 
         // 4. Calculate Neural Fatigue Index (NFI)
         const todayVmax = latestSession?.max_speed || 0;
@@ -204,11 +201,11 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
         // 8. Race estimates based on best Vmax + training interval history
         const bestVmax60d = activities.reduce((best, a) => Math.max(best, a.max_speed), 0);
 
-        // Fetch structured interval data from the Intervals.icu API for each activity.
+        // Fetch structured interval data from the Intervals.icu API for each activity
+        // in the 60-day window. Only sprint-range efforts (≤ 400m) are included by the parser.
         // The /intervals endpoint provides accurate rep-level data (distance, max_speed,
         // moving_time) that is not present in the activity list response.
-        // We limit to 20 most-recent activities to keep the number of parallel calls reasonable.
-        const activitiesForIntervals = activities.slice(0, 20);
+        const activitiesForIntervals = activities;
         const intervalFetches = await Promise.allSettled(
           activitiesForIntervals.map(async (a) => {
             const res = await fetch(
@@ -370,7 +367,7 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
 
         setData({
           activities,
-          intervals: parsedIntervals,
+          intervals: allTrainingIntervals,
           wellness: latestWellness,
           nfi: currentNFI,
           nfiStatus,
