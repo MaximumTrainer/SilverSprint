@@ -156,9 +156,6 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
 
         // 3. Parse Latest Session for Sprint Metrics
         const latestSession = activities[0];
-        const parsedIntervals = latestSession
-          ? SprintParser.parseTrackSession(latestSession)
-          : [];
 
         // 4. Calculate Neural Fatigue Index (NFI)
         const todayVmax = latestSession?.max_speed || 0;
@@ -370,7 +367,7 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
 
         setData({
           activities,
-          intervals: parsedIntervals,
+          intervals: allTrainingIntervals,
           wellness: latestWellness,
           nfi: currentNFI,
           nfiStatus,
