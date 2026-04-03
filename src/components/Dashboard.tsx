@@ -12,6 +12,7 @@ import { TimeSeriesChart } from './TimeSeriesChart';
 import type { DailyDataPoint } from '../domain/types';
 import { SpringTrainingPanel } from './SpringTrainingPanel';
 import { TrainingPlanPanel } from './TrainingPlanPanel';
+import { DemoBanner } from './DemoBanner';
 
 export interface AthleteData {
   name: string;
@@ -38,6 +39,8 @@ interface DashboardProps {
   /** 12-week training plan context, present when a race is within 84 days */
   trainingPlan: TrainingPlanContext | null;
   onLogout: () => void;
+  /** When provided, the user is unauthenticated — show demo header instead of user info. */
+  onLogin?: () => void;
   onPushWorkout: (workout: SprintWorkout, date: string) => Promise<boolean>;
   onPushSession: (sessionName: string, raceName: string, date: string) => Promise<boolean>;
 }
@@ -195,6 +198,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   sprintRacePlans,
   trainingPlan,
   onLogout,
+  onLogin,
   onPushWorkout,
   onPushSession,
 }) => {
@@ -269,28 +273,43 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              fontSize: 13,
-              color: 'var(--icu-text-secondary)',
-            }}
-          >
-            <User size={14} />
-            <span>{athleteData.name}</span>
-          </div>
-          <button
-            onClick={onLogout}
-            className="icu-btn-ghost"
-            style={{ padding: '4px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}
-          >
-            <LogOut size={14} />
-            Log out
-          </button>
+          {onLogin ? (
+            <button
+              onClick={onLogin}
+              className="icu-btn"
+              style={{ padding: '5px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <Zap size={13} />
+              Connect with Intervals.icu
+            </button>
+          ) : (
+            <>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 13,
+                  color: 'var(--icu-text-secondary)',
+                }}
+              >
+                <User size={14} />
+                <span>{athleteData.name}</span>
+              </div>
+              <button
+                onClick={onLogout}
+                className="icu-btn-ghost"
+                style={{ padding: '4px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}
+              >
+                <LogOut size={14} />
+                Log out
+              </button>
+            </>
+          )}
         </div>
       </header>
+
+      {onLogin && <DemoBanner onLogin={onLogin} />}
 
       {/* ── Main Content ───────────────────────────────────── */}
       <main style={{ maxWidth: 1200, margin: '0 auto', padding: '20px 16px' }}>

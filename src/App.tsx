@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { AuthGate } from './components/AuthGate';
 import { OAuthCallbackPage } from './components/OAuthCallbackPage';
 import { Dashboard, AthleteData } from './components/Dashboard';
 import { useIntervalsData } from './hooks/useIntervalsData';
@@ -8,6 +7,15 @@ import { clientLogger } from './logger';
 import { AlertCircle, Zap } from 'lucide-react';
 import { INTERVALS_BASE } from './config/api';
 import { AuthCredentials, buildAuthorizationHeader, loadPersistedLogin, clearAuthCookie } from './lib/auth-storage';
+import { initiateOAuthFlow, getOAuthRedirectUri } from './lib/oauth';
+import {
+  mockAthleteData,
+  mockDailyTimeSeries,
+  mockRaceEstimates,
+  mockRecoveredEstimates,
+  mockSprintRacePlans,
+  mockTrainingPlan,
+} from './data/mockDashboardData';
 
 const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthCredentials | null>(null);
@@ -77,6 +85,15 @@ const App: React.FC = () => {
     intervals, wellness, nfi, nfiStatus, avgVmax, todayVmax,
     recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, loading, error,
   } = useIntervalsData(auth?.athleteId || '', auth?.accessToken || '', auth?.authType || 'basic');
+
+  const handleOAuthLogin = async () => {
+    try {
+      await initiateOAuthFlow(getOAuthRedirectUri());
+      // Browser will redirect — execution stops here.
+    } catch (err) {
+      clientLogger.error('Failed to initiate OAuth flow', '', err);
+    }
+  };
 
   const handleLogout = () => {
     sessionStorage.removeItem('silver_sprint_auth');
@@ -168,9 +185,22 @@ const App: React.FC = () => {
     return <OAuthCallbackPage onLogin={(creds) => setAuth(creds)} />;
   }
 
-  // 4. Render Login if no auth
+  // 4. Render demo dashboard with mock data when not authenticated
   if (!auth) {
-    return <AuthGate onLogin={(creds) => setAuth(creds)} />;
+    return (
+      <Dashboard
+        athleteData={mockAthleteData}
+        dailyTimeSeries={mockDailyTimeSeries}
+        raceEstimates={mockRaceEstimates}
+        recoveredEstimates={mockRecoveredEstimates}
+        sprintRacePlans={mockSprintRacePlans}
+        trainingPlan={mockTrainingPlan}
+        onLogin={handleOAuthLogin}
+        onLogout={() => {}}
+        onPushWorkout={async () => false}
+        onPushSession={async () => false}
+      />
+    );
   }
 
   // 5. Render Loading State
