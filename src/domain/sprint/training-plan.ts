@@ -614,6 +614,7 @@ export class SprintTrainingPlan {
         return PlanSessionGenerators.acceleration(planWeek, phaseName, spec.label, effectiveStatus);
 
       case 'tempo':
+        if (nfiStatus === 'red' && !stale) return PlanSessionGenerators.recovery(planWeek, phaseName, spec.label);
         return PlanSessionGenerators.tempo(planWeek, phaseName, spec.label, effectiveStatus);
 
       case 'speed_endurance':
