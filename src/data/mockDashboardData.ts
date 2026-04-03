@@ -8,6 +8,7 @@ import type { DailyDataPoint } from '../domain/types';
 import type { RaceEstimate } from '../domain/sprint/race-estimator';
 import type { SprintRacePlan } from '../domain/sprint/race-plan';
 import type { TrainingPlanContext } from '../domain/sprint/training-plan';
+import { SprintTrainingPlan } from '../domain/sprint/training-plan';
 
 // ── Athlete summary ───────────────────────────────────────────────
 
@@ -163,47 +164,14 @@ export const mockSprintRacePlans: SprintRacePlan[] = [
 
 // ── 12-week training plan context ─────────────────────────────────
 
-export const mockTrainingPlan: TrainingPlanContext = {
-  planWeek: 6,
-  daysUntilRace: 42,
-  raceName: 'County Masters Track Championships',
-  raceDistanceM: 200,
-  phase: 'spp',
-  phaseName: 'Special Physical Preparation',
-  weekTheme: 'Speed endurance — extend near-max efforts to 150 m',
-  todaySpec: {
-    sessionType: 'speed_endurance',
-    label: 'Speed Endurance — 120 m Sets',
-    volume: '480 m',
-    notes: 'Run at 90–92% effort. Full 8-min recovery between reps. Stop if form breaks.',
-  },
-  todayWorkout: {
-    name: 'Amber — Speed Endurance (Technical)',
-    status: 'amber',
-    rationale: 'NFI is amber — volume reduced, quality maintained. Focus on mechanics over intensity.',
-    warmup: [
-      '10 min easy jog',
-      'Dynamic mobility — leg swings, hip circles, high knees',
-      '4 × 30 m accelerations at 70%, 80%, 85%, 90%',
-    ],
-    mainSet: [
-      {
-        name: 'Speed Endurance',
-        reps: 3,
-        distance: '120 m',
-        rest: '8 min',
-        intensity: '90%',
-        cue: 'Drive phase to 40 m, maintain tall posture through finish.',
-      },
-    ],
-    cooldown: [
-      '800 m easy walk/jog',
-      'Static stretch — hip flexors, hamstrings, calves (2 min each)',
-    ],
-    totalSprintVolume: '360 m',
-    workoutDescription: 'Speed endurance session adjusted for amber neural readiness.',
-  },
-  plan: [],
-  nfiAdjusted: true,
-  nfiAdjustmentNote: 'Volume reduced by ~20% due to amber NFI (95.5%). Prioritise quality over quantity.',
-};
+// Generate a real plan context using the same logic as the live app,
+// so the plan[] array is fully populated and the panel won't crash.
+export const mockTrainingPlan: TrainingPlanContext | null =
+  SprintTrainingPlan.buildContext(
+    42,
+    'County Masters Track Championships',
+    200,
+    mockAthleteData.nfiStatus,
+    mockAthleteData.nfi,
+    mockAthleteData.tsb,
+  );
