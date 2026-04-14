@@ -387,13 +387,13 @@ describe('SprintParser.fromAPIInterval — Intervals.icu /activity/{id}/interval
   });
 
   it('rejects intervals exceeding 25 s (sprint duration cap)', () => {
-    // 100m in 35 s — duration exceeds max sprint duration even though pace is fast enough
+    // 160m in 26 s → computed avg speed ≈ 6.15 m/s, so pace passes while duration exceeds the 25 s cap
     const result = SprintParser.fromAPIInterval({
       type: 'WORK',
-      distance: 100,
-      moving_time: 35,
-      max_speed: 6.0,
-      average_speed: 2.86,
+      distance: 160,
+      moving_time: 26,
+      max_speed: 8.0,
+      average_speed: 6.15,
     });
     expect(result).toBeNull();
   });

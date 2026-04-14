@@ -275,10 +275,21 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
               continue;
             }
             const streams = await streamsRes.json();
-            const velocitySmooth: number[] = Array.isArray(streams?.velocity_smooth?.data)
+            const rawVelocitySmooth = Array.isArray(streams?.velocity_smooth?.data)
               ? streams.velocity_smooth.data
               : Array.isArray(streams?.velocity_smooth) ? streams.velocity_smooth : [];
-            if (velocitySmooth.length === 0) continue;
+            const velocitySmooth = rawVelocitySmooth.filter(
+              (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+            );
+            if (velocitySmooth.length === 0) {
+              if (rawVelocitySmooth.length > 0) {
+                clientLogger.warn(
+                  `Skipping velocity stream for activity ${a.id}: stream contained no valid numeric samples`,
+                  athleteId
+                );
+              }
+              continue;
+            }
             allTrainingIntervals.push(
               ...SprintParser.parseTrackSession({ velocity_smooth: velocitySmooth })
             );
