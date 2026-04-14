@@ -404,6 +404,249 @@ describe('SprintParser.fromAPIInterval — Intervals.icu /activity/{id}/interval
   });
 });
 
+/**
+ * Common sprint distances — ensure 30m, 60m, 90m, 100m, 150m are all detected
+ * from both API intervals and velocity streams with realistic time & pace data.
+ *
+ * Reference paces (recreational → competitive):
+ *   30m:  4.5–5.5s  (avg 5.5–6.7 m/s)
+ *   60m:  7.5–9.5s  (avg 6.3–8.0 m/s)
+ *   90m: 11–14s     (avg 6.4–8.2 m/s)
+ *  100m: 12–16s     (avg 6.3–8.3 m/s)
+ *  150m: 19–25s     (avg 6.0–7.9 m/s)
+ */
+describe('SprintParser — common sprint distance detection (30m, 60m, 90m, 100m, 150m)', () => {
+  // ----- 30m -----
+  it('detects a 30m sprint from API interval (competitive: 4.2s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 30,
+      moving_time: 4.2,
+      max_speed: 9.5,
+      average_speed: 7.14,  // 30 / 4.2
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(30);
+    expect(result!.type).toBe('Acceleration');
+    expect(result!.vMax).toBe(9.5);
+    expect(result!.duration).toBe(4.2);
+    expect(result!.flyingVelocity).toBe(7.14);
+  });
+
+  it('detects a 30m sprint from API interval (recreational: 5.5s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 30,
+      moving_time: 5.5,
+      max_speed: 7.5,
+      average_speed: 5.45,  // 30 / 5.5
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(30);
+    expect(result!.type).toBe('Acceleration');
+  });
+
+  it('detects a 30m sprint from velocity stream', () => {
+    // ~30m: 4s acceleration phase then stop
+    const stream = [0, 0, 3.0, 6.0, 8.5, 9.5, 3.0, 0];
+    const result = SprintParser.parseTrackSession({ velocity_smooth: stream });
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].type).toBe('Acceleration');
+    expect(result[0].distance).toBeGreaterThanOrEqual(10);
+    expect(result[0].distance).toBeLessThanOrEqual(40);
+  });
+
+  // ----- 60m -----
+  it('detects a 60m sprint from API interval (competitive: 7.5s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 60,
+      moving_time: 7.5,
+      max_speed: 10.2,
+      average_speed: 8.0,  // 60 / 7.5
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(60);
+    expect(result!.type).toBe('MaxVelocity');
+    expect(result!.vMax).toBe(10.2);
+    expect(result!.duration).toBe(7.5);
+    expect(result!.flyingVelocity).toBe(8.0);
+  });
+
+  it('detects a 60m sprint from API interval (recreational: 9.5s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 60,
+      moving_time: 9.5,
+      max_speed: 7.8,
+      average_speed: 6.32,  // 60 / 9.5
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(60);
+    expect(result!.type).toBe('MaxVelocity');
+  });
+
+  it('detects a 60m sprint from velocity stream', () => {
+    // ~60m burst: accel then maintain speed
+    const stream = [0, 0, 3.0, 6.0, 9.0, 10.0, 10.0, 10.0, 9.5, 3.0, 0];
+    const result = SprintParser.parseTrackSession({ velocity_smooth: stream });
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].type).toBe('MaxVelocity');
+    expect(result[0].distance).toBeGreaterThanOrEqual(40);
+    expect(result[0].distance).toBeLessThanOrEqual(80);
+  });
+
+  // ----- 90m -----
+  it('detects a 90m sprint from API interval (competitive: 11s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 90,
+      moving_time: 11,
+      max_speed: 10.5,
+      average_speed: 8.18,  // 90 / 11
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(90);
+    expect(result!.type).toBe('SpeedEndurance');
+    expect(result!.vMax).toBe(10.5);
+  });
+
+  it('detects a 90m sprint from API interval (recreational: 14s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 90,
+      moving_time: 14,
+      max_speed: 8.0,
+      average_speed: 6.43,  // 90 / 14
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(90);
+    expect(result!.type).toBe('SpeedEndurance');
+  });
+
+  it('detects a 90m sprint from velocity stream', () => {
+    // ~90m burst: accel then 10s at ~8-9 m/s
+    const stream = [0, 0, 3.0, 6.0, 8.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 3.0, 0];
+    const result = SprintParser.parseTrackSession({ velocity_smooth: stream });
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].type).toBe('SpeedEndurance');
+    expect(result[0].distance).toBeGreaterThanOrEqual(80);
+    expect(result[0].distance).toBeLessThanOrEqual(150);
+  });
+
+  // ----- 100m -----
+  it('detects a 100m sprint from API interval (competitive: 12s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 100,
+      moving_time: 12,
+      max_speed: 10.8,
+      average_speed: 8.33,  // 100 / 12
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(100);
+    expect(result!.type).toBe('SpeedEndurance');
+    expect(result!.vMax).toBe(10.8);
+    expect(result!.duration).toBe(12);
+    expect(result!.flyingVelocity).toBe(8.33);
+  });
+
+  it('detects a 100m sprint from API interval (recreational: 16s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 100,
+      moving_time: 16,
+      max_speed: 8.0,
+      average_speed: 6.25,  // 100 / 16
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(100);
+    expect(result!.type).toBe('SpeedEndurance');
+  });
+
+  it('detects a 100m sprint from velocity stream', () => {
+    // ~100m burst: accel then sustain at ~9 m/s
+    const stream = [
+      0, 0,
+      3.0, 6.0, 8.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
+      3.0, 0,
+    ];
+    const result = SprintParser.parseTrackSession({ velocity_smooth: stream });
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].type).toBe('SpeedEndurance');
+    expect(result[0].distance).toBeGreaterThanOrEqual(80);
+    expect(result[0].distance).toBeLessThanOrEqual(150);
+  });
+
+  // ----- 150m -----
+  it('detects a 150m sprint from API interval (competitive: 19s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 150,
+      moving_time: 19,
+      max_speed: 10.5,
+      average_speed: 7.89,  // 150 / 19
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(150);
+    expect(result!.type).toBe('SpeedEndurance');
+    expect(result!.vMax).toBe(10.5);
+  });
+
+  it('detects a 150m sprint from API interval (recreational: 25s)', () => {
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 150,
+      moving_time: 25,
+      max_speed: 8.0,
+      average_speed: 6.0,  // 150 / 25
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(150);
+    expect(result!.type).toBe('SpeedEndurance');
+  });
+
+  it('detects a 150m sprint from velocity stream', () => {
+    // ~150m burst: accel phase + sustained running at ~9 m/s
+    const stream = [
+      0, 0,
+      3.0, 6.0, 8.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
+      3.0, 0,
+    ];
+    const result = SprintParser.parseTrackSession({ velocity_smooth: stream });
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].type).toBe('SpeedEndurance');
+    expect(result[0].distance).toBeGreaterThanOrEqual(80);
+    expect(result[0].distance).toBeLessThanOrEqual(160);
+  });
+
+  // ----- Multi-rep session: typical sprint workout with varied distances -----
+  it('detects multiple sprint distances in a single API interval set', () => {
+    const intervals = [
+      { type: 'WORK', distance: 30, moving_time: 4.5, max_speed: 9.0, average_speed: 6.67 },
+      { type: 'REST', distance: 30, moving_time: 120, max_speed: 1.5, average_speed: 0.25 },
+      { type: 'WORK', distance: 60, moving_time: 8, max_speed: 9.5, average_speed: 7.5 },
+      { type: 'REST', distance: 60, moving_time: 180, max_speed: 1.2, average_speed: 0.33 },
+      { type: 'WORK', distance: 100, moving_time: 13, max_speed: 10.0, average_speed: 7.69 },
+      { type: 'REST', distance: 100, moving_time: 240, max_speed: 1.0, average_speed: 0.42 },
+      { type: 'WORK', distance: 150, moving_time: 20, max_speed: 10.2, average_speed: 7.5 },
+    ];
+    const detected = intervals
+      .map(i => SprintParser.fromAPIInterval(i))
+      .filter((i): i is TrackInterval => i !== null);
+
+    expect(detected.length).toBe(4); // 4 WORK intervals, 3 REST excluded
+    expect(detected[0].distance).toBe(30);
+    expect(detected[0].type).toBe('Acceleration');
+    expect(detected[1].distance).toBe(60);
+    expect(detected[1].type).toBe('MaxVelocity');
+    expect(detected[2].distance).toBe(100);
+    expect(detected[2].type).toBe('SpeedEndurance');
+    expect(detected[3].distance).toBe(150);
+    expect(detected[3].type).toBe('SpeedEndurance');
+  });
+});
+
 describe('SprintParser.parseTrackSession — 400m upper-distance filter', () => {
   it('excludes velocity-stream bursts longer than 400m', () => {
     // Simulate a 500m easy jog at 4 m/s for 125 seconds → distance ~500m
