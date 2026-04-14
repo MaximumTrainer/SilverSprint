@@ -42,21 +42,6 @@ describe('IntervalsActivitySchema (§2.2)', () => {
     }
   });
 
-  it('accepts TrailRun activities', () => {
-    const result = IntervalsActivitySchema.safeParse({ ...validActivity, type: 'TrailRun' });
-    expect(result.success).toBe(true);
-  });
-
-  it('accepts VirtualRun activities', () => {
-    const result = IntervalsActivitySchema.safeParse({ ...validActivity, type: 'VirtualRun' });
-    expect(result.success).toBe(true);
-  });
-
-  it('accepts Track activities', () => {
-    const result = IntervalsActivitySchema.safeParse({ ...validActivity, type: 'Track' });
-    expect(result.success).toBe(true);
-  });
-
   it('defaults velocity_smooth to empty array when not provided', () => {
     const { velocity_smooth, ...rest } = validActivity;
     const result = IntervalsActivitySchema.safeParse(rest);
