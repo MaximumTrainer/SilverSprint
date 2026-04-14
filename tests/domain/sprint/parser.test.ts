@@ -277,7 +277,7 @@ describe('SprintParser.fromAPIInterval — Intervals.icu /activity/{id}/interval
     expect(result!.type).toBe('MaxVelocity');
   });
 
-  it('rejects a 400m interval (duration exceeds 25 s sprint cap)', () => {
+  it('rejects a 400m interval (52 s duration exceeds 25 s sprint cap)', () => {
     // 400m sprint at 52 s is well above the 25 s maximum sprint duration
     const result = SprintParser.fromAPIInterval({
       type: 'WORK',
@@ -693,7 +693,7 @@ describe('SprintParser — common sprint distance detection (30m, 60m, 90m, 100m
   });
 });
 
-describe('SprintParser.parseTrackSession — distance and duration filters', () => {
+describe('SprintParser.parseTrackSession — 400m distance and 25s duration filters', () => {
   it('excludes velocity-stream bursts longer than 400m', () => {
     // Simulate a 500m easy jog at 4 m/s for 125 seconds → distance ~500m
     const stream = Array(125).fill(4.0);
