@@ -1,8 +1,22 @@
 import { z } from 'zod';
 
+/**
+ * Activity types from Intervals.icu that represent running.
+ * The API uses Strava sport-type strings; we accept all run sub-types
+ * so that trail runs, virtual runs, and track sessions are not silently dropped.
+ */
+export const RUN_ACTIVITY_TYPES = [
+  'Run',
+  'TrailRun',
+  'VirtualRun',
+  'Track',
+  'TrackAndField',
+  'Treadmill',
+] as const;
+
 export const IntervalsActivitySchema = z.object({
   id: z.string(),
-  type: z.literal('Run'),
+  type: z.enum(RUN_ACTIVITY_TYPES),
   start_date_local: z.string().optional(),
   velocity_smooth: z.array(z.number()).default([]),
   max_speed: z.number(),

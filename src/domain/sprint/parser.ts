@@ -33,12 +33,18 @@ export class SprintParser {
   private static readonly REST_INTERVAL_TYPES = ['REST', 'ACTIVE_REST', 'WARMUP', 'COOLDOWN', 'RECOVERY'] as const;
 
   /**
-   * Minimum average speed (m/s) to be considered a sprint effort.
-   * Filters out rest periods that are labelled WORK by Intervals.icu
-   * (e.g. 300-second walk-back recovery intervals with avg 0.2–0.6 m/s).
-   * Even a standing-start 10 m sprint has an average speed > 4 m/s.
+   * Minimum average speed (m/s) for a sprint interval, derived from a
+   * 3:00 min/km pace: 1000 m / 180 s ≈ 5.556 m/s.
+   * Anything slower is not a sprint effort (jog / walk-back / rest).
    */
-  private static readonly MIN_SPRINT_AVG_SPEED = 4.0; // m/s ≈ 14.4 km/h
+  private static readonly MIN_SPRINT_PACE_SPEED = 1000 / 180; // ≈ 5.556 m/s — pace < 3:00/km
+
+  /**
+   * Maximum duration (seconds) for a sprint interval.
+   * Sprint efforts (30–150 m) are completed in under 25 s even at recreational
+   * pace.  Longer intervals are recovery jogs or distance-running laps.
+   */
+  private static readonly MAX_SPRINT_DURATION = 25; // seconds
 
   /**
    * Parse a full session's velocity_smooth stream into classified intervals.
@@ -75,6 +81,17 @@ export class SprintParser {
     const distance = burst.reduce((sum, v) => sum + v, 0);
 
     if (distance < this.MIN_REP_DISTANCE || distance > this.MAX_SPRINT_DISTANCE) {
+      return null;
+    }
+
+    // Reject bursts longer than the maximum sprint duration
+    if (burst.length > this.MAX_SPRINT_DURATION) {
+      return null;
+    }
+
+    // Reject bursts with average pace slower than 3:00/km
+    const avgSpeed = distance / burst.length;
+    if (avgSpeed < this.MIN_SPRINT_PACE_SPEED) {
       return null;
     }
 
@@ -138,11 +155,16 @@ export class SprintParser {
       return null;
     }
 
-    // Reject rest periods that Intervals.icu labels as WORK: they have very low
-    // average speed (e.g. 0.2–0.6 m/s walk-back) even though max_speed may be
-    // non-zero (residual from the preceding sprint). Any real sprint effort —
-    // even a short standing-start — produces an average speed above this floor.
-    if (flyingVelocity > 0 && flyingVelocity < this.MIN_SPRINT_AVG_SPEED) {
+    // Reject intervals that exceed the maximum sprint duration (25 s).
+    if (duration > this.MAX_SPRINT_DURATION) {
+      return null;
+    }
+
+    // Reject intervals with average pace slower than 3:00/km.
+    // Computed from distance/time (not the API's average_speed) so the check
+    // is always applied, even when the API omits average_speed.
+    const computedAvgSpeed = distance / duration;
+    if (computedAvgSpeed < this.MIN_SPRINT_PACE_SPEED) {
       return null;
     }
 
