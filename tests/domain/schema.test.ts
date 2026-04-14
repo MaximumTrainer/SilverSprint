@@ -8,7 +8,7 @@ import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsIntervalSche
  * The spec requires:
  *   id: z.string()
  *   type: z.enum(RUN_ACTIVITY_TYPES)  — accepted run sub-types
- *   velocity_smooth: z.array(z.number())  — required
+ *   velocity_smooth: z.array(z.number())  — optional, defaults to []
  *   max_speed: z.number()                 — required
  *   icu_training_load: z.number()
  *   icu_atl: z.number()                   — Fatigue

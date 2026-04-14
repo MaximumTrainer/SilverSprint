@@ -237,41 +237,59 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
         );
 
         // Merge: for each activity use API intervals when available, else fall back
-        // to fetching the full activity detail (for its velocity_smooth stream) and
+        // to fetching the activity's /streams endpoint (for its velocity_smooth) and
         // parsing it.  The activity list endpoint omits velocity_smooth, so the
-        // parseTrackSession fallback only works when the full detail is fetched.
-        const allTrainingIntervals = (await Promise.all(
-          activitiesForIntervals.map(async (a, idx) => {
-            const result = intervalFetches[idx];
-            if (result.status === 'fulfilled' && result.value.intervals.length > 0) {
-              return result.value.intervals;
-            }
+        // parseTrackSession fallback only works when the stream is fetched separately.
+        // To avoid an unbounded burst of fallback requests (rate-limit risk), we
+        // process activities that need a fallback sequentially.
+        const allTrainingIntervals: TrackInterval[] = [];
+        for (let idx = 0; idx < activitiesForIntervals.length; idx++) {
+          const a = activitiesForIntervals[idx];
+          const result = intervalFetches[idx];
+          if (result.status === 'fulfilled' && result.value.intervals.length > 0) {
+            allTrainingIntervals.push(...result.value.intervals);
+            continue;
+          }
 
-            // Attempt to parse from the activity's velocity_smooth (may be populated
-            // by the list endpoint on some accounts).
-            const streamIntervals = SprintParser.parseTrackSession(a);
-            if (streamIntervals.length > 0) return streamIntervals;
+          // Attempt to parse from the activity's velocity_smooth (may be populated
+          // by the list endpoint on some accounts).
+          const streamIntervals = SprintParser.parseTrackSession(a);
+          if (streamIntervals.length > 0) {
+            allTrainingIntervals.push(...streamIntervals);
+            continue;
+          }
 
-            // Last resort: fetch the full activity detail to get its velocity_smooth
-            // stream, then parse that.  This is an extra API call per activity that
-            // lacked both interval and stream data.
-            try {
-              const detailRes = await fetch(
-                `${INTERVALS_BASE}/api/v1/activity/${a.id}`,
-                { headers }
+          // Last resort: fetch the activity's /streams endpoint to get velocity_smooth.
+          // This is an extra API call per activity that lacked both interval and
+          // list-level stream data.  Sequential processing avoids rate-limit bursts.
+          try {
+            const streamsRes = await fetch(
+              `${INTERVALS_BASE}/api/v1/activity/${a.id}/streams`,
+              { headers }
+            );
+            if (!streamsRes.ok) {
+              clientLogger.warn(
+                `Failed to fetch velocity stream for activity ${a.id}: ${streamsRes.status} ${streamsRes.statusText}`,
+                athleteId
               );
-              if (!detailRes.ok) return [];
-              const detail = await detailRes.json();
-              const velocitySmooth: number[] = Array.isArray(detail?.velocity_smooth)
-                ? detail.velocity_smooth
-                : [];
-              if (velocitySmooth.length === 0) return [];
-              return SprintParser.parseTrackSession({ velocity_smooth: velocitySmooth });
-            } catch {
-              return [];
+              continue;
             }
-          })
-        )).flat();
+            const streams = await streamsRes.json();
+            const velocitySmooth: number[] = Array.isArray(streams?.velocity_smooth?.data)
+              ? streams.velocity_smooth.data
+              : Array.isArray(streams?.velocity_smooth) ? streams.velocity_smooth : [];
+            if (velocitySmooth.length === 0) continue;
+            allTrainingIntervals.push(
+              ...SprintParser.parseTrackSession({ velocity_smooth: velocitySmooth })
+            );
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            clientLogger.warn(
+              `Failed to fetch or parse velocity stream for activity ${a.id}: ${reason}`,
+              athleteId
+            );
+          }
+        }
 
         // Aggregate total training load from ALL interval types across recent sessions.
         // This captures non-sprint load (warmup, cooldown, rest) that would otherwise
