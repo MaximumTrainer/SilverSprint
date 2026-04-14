@@ -33,12 +33,26 @@ export class SprintParser {
   private static readonly REST_INTERVAL_TYPES = ['REST', 'ACTIVE_REST', 'WARMUP', 'COOLDOWN', 'RECOVERY'] as const;
 
   /**
-   * Minimum average speed (m/s) to be considered a sprint effort.
+   * Minimum average speed (m/s) to be considered a sprint effort for longer intervals (> 30s).
    * Filters out rest periods that are labelled WORK by Intervals.icu
    * (e.g. 300-second walk-back recovery intervals with avg 0.2–0.6 m/s).
    * Even a standing-start 10 m sprint has an average speed > 4 m/s.
    */
   private static readonly MIN_SPRINT_AVG_SPEED = 4.0; // m/s ≈ 14.4 km/h
+
+  /**
+   * Lower average-speed floor for short intervals (≤ 30s).
+   * GPS-measured average speed for sub-10s laps is unreliable because the lap
+   * boundary may include approach/deceleration time.  We still reject obvious
+   * rest intervals (e.g. standing around at < 2 m/s).
+   */
+  private static readonly MIN_SHORT_INTERVAL_AVG_SPEED = 2.0; // m/s ≈ 7.2 km/h
+
+  /**
+   * Duration threshold (seconds): intervals at or below this duration use the
+   * lower average-speed floor ({@link MIN_SHORT_INTERVAL_AVG_SPEED}).
+   */
+  private static readonly SHORT_INTERVAL_DURATION = 30; // seconds
 
   /**
    * Parse a full session's velocity_smooth stream into classified intervals.
@@ -142,7 +156,12 @@ export class SprintParser {
     // average speed (e.g. 0.2–0.6 m/s walk-back) even though max_speed may be
     // non-zero (residual from the preceding sprint). Any real sprint effort —
     // even a short standing-start — produces an average speed above this floor.
-    if (flyingVelocity > 0 && flyingVelocity < this.MIN_SPRINT_AVG_SPEED) {
+    // Short intervals (≤ 30s) use a lower threshold because GPS-measured average
+    // speed is unreliable for sub-10s laps (approach/deceleration artefacts).
+    const speedFloor = duration <= this.SHORT_INTERVAL_DURATION
+      ? this.MIN_SHORT_INTERVAL_AVG_SPEED
+      : this.MIN_SPRINT_AVG_SPEED;
+    if (flyingVelocity > 0 && flyingVelocity < speedFloor) {
       return null;
     }
 

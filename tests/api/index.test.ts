@@ -221,10 +221,10 @@ describe('Webhook handler — full pipeline with mocked fetch (§5)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('returns 422 when activity data fails Zod validation', async () => {
+  it('returns 422 when activity data fails Zod validation (non-run type)', async () => {
     const invalidActivity = {
       id: 'act_invalid',
-      type: 'Ride', // Not 'Run' — should fail literal check
+      type: 'Ride', // Not a run type — should fail enum check
       velocity_smooth: [1, 2, 3],
       max_speed: 5.0,
       icu_training_load: 50,

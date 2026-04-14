@@ -237,14 +237,41 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
         );
 
         // Merge: for each activity use API intervals when available, else fall back
-        // to parsing the velocity_smooth stream (which may be empty from the list API).
-        const allTrainingIntervals = activitiesForIntervals.flatMap((a, idx) => {
-          const result = intervalFetches[idx];
-          if (result.status === 'fulfilled' && result.value.intervals.length > 0) {
-            return result.value.intervals;
-          }
-          return SprintParser.parseTrackSession(a);
-        });
+        // to fetching the full activity detail (for its velocity_smooth stream) and
+        // parsing it.  The activity list endpoint omits velocity_smooth, so the
+        // parseTrackSession fallback only works when the full detail is fetched.
+        const allTrainingIntervals = (await Promise.all(
+          activitiesForIntervals.map(async (a, idx) => {
+            const result = intervalFetches[idx];
+            if (result.status === 'fulfilled' && result.value.intervals.length > 0) {
+              return result.value.intervals;
+            }
+
+            // Attempt to parse from the activity's velocity_smooth (may be populated
+            // by the list endpoint on some accounts).
+            const streamIntervals = SprintParser.parseTrackSession(a);
+            if (streamIntervals.length > 0) return streamIntervals;
+
+            // Last resort: fetch the full activity detail to get its velocity_smooth
+            // stream, then parse that.  This is an extra API call per activity that
+            // lacked both interval and stream data.
+            try {
+              const detailRes = await fetch(
+                `${INTERVALS_BASE}/api/v1/activity/${a.id}`,
+                { headers }
+              );
+              if (!detailRes.ok) return [];
+              const detail = await detailRes.json();
+              const velocitySmooth: number[] = Array.isArray(detail?.velocity_smooth)
+                ? detail.velocity_smooth
+                : [];
+              if (velocitySmooth.length === 0) return [];
+              return SprintParser.parseTrackSession({ velocity_smooth: velocitySmooth });
+            } catch {
+              return [];
+            }
+          })
+        )).flat();
 
         // Aggregate total training load from ALL interval types across recent sessions.
         // This captures non-sprint load (warmup, cooldown, rest) that would otherwise

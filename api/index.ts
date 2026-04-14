@@ -1,7 +1,7 @@
 import { SprintParser, TrackInterval } from '../src/domain/sprint/parser';
 import { SilverSprintLogic } from '../src/domain/sprint/core';
 import { IntervalsCustomStreams } from '../src/domain/sprint/custom-streams';
-import { IntervalsActivitySchema, IntervalsIntervalSchema } from '../src/domain/schema';
+import { IntervalsActivitySchema, IntervalsIntervalSchema, RUN_ACTIVITY_TYPES } from '../src/domain/schema';
 import { logger } from './logger';
 import { z } from 'zod';
 
@@ -120,7 +120,7 @@ export default async function handler(req: ServerlessRequest, res: ServerlessRes
     );
     const recentActivities: Array<{ type?: string; id?: string; max_speed?: number }> = recentRes.ok ? await recentRes.json() : [];
     const validVmaxes = recentActivities
-      .filter((a) => a.type === 'Run' && a.id !== id && (a.max_speed ?? 0) > 0)
+      .filter((a) => (RUN_ACTIVITY_TYPES as readonly string[]).includes(a.type ?? '') && a.id !== id && (a.max_speed ?? 0) > 0)
       .map((a) => a.max_speed!);
 
     const avgVmax = validVmaxes.length > 0

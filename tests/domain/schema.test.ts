@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsIntervalSchema } from '../../src/domain/schema';
+import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsIntervalSchema, RUN_ACTIVITY_TYPES } from '../../src/domain/schema';
 
 /**
  * Tests for README §2.2 — Data Ingestion Schema (Zod)
  *
  * The spec requires:
  *   id: z.string()
- *   type: z.literal('Run')
+ *   type: z.enum(RUN_ACTIVITY_TYPES)  — accepted run sub-types
  *   velocity_smooth: z.array(z.number())  — required
  *   max_speed: z.number()                 — required
  *   icu_training_load: z.number()
@@ -30,9 +30,31 @@ describe('IntervalsActivitySchema (§2.2)', () => {
     expect(result.success).toBe(true);
   });
 
-  it('rejects activity with wrong type (must be literal "Run")', () => {
+  it('rejects activity with non-run type (e.g. Ride)', () => {
     const result = IntervalsActivitySchema.safeParse({ ...validActivity, type: 'Ride' });
     expect(result.success).toBe(false);
+  });
+
+  it('accepts all RUN_ACTIVITY_TYPES', () => {
+    for (const runType of RUN_ACTIVITY_TYPES) {
+      const result = IntervalsActivitySchema.safeParse({ ...validActivity, type: runType });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it('accepts TrailRun activities', () => {
+    const result = IntervalsActivitySchema.safeParse({ ...validActivity, type: 'TrailRun' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts VirtualRun activities', () => {
+    const result = IntervalsActivitySchema.safeParse({ ...validActivity, type: 'VirtualRun' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts Track activities', () => {
+    const result = IntervalsActivitySchema.safeParse({ ...validActivity, type: 'Track' });
+    expect(result.success).toBe(true);
   });
 
   it('defaults velocity_smooth to empty array when not provided', () => {

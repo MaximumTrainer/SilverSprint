@@ -362,6 +362,46 @@ describe('SprintParser.fromAPIInterval — Intervals.icu /activity/{id}/interval
     });
     expect(result).not.toBeNull();
   });
+
+  it('accepts a short interval (≤30s) with low GPS average speed but valid max_speed', () => {
+    // GPS-measured average speed for very short laps (5s) can be unreliable
+    // due to approach/deceleration artefacts. This should still be accepted
+    // because duration ≤ 30s and average_speed ≥ 2.0 m/s.
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 15,
+      moving_time: 5,
+      max_speed: 8.5,
+      average_speed: 2.95, // 5:39/km — below 4.0 m/s but above 2.0 m/s
+    });
+    expect(result).not.toBeNull();
+    expect(result!.distance).toBe(15);
+    expect(result!.vMax).toBe(8.5);
+  });
+
+  it('rejects a short interval with average speed below 2.0 m/s', () => {
+    // Even for short intervals, sub-2.0 m/s is standing/walking — not a sprint
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 15,
+      moving_time: 10,
+      max_speed: 5.0,
+      average_speed: 1.5,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('still rejects longer intervals (>30s) with average speed below 4.0 m/s', () => {
+    // Longer intervals use the standard 4.0 m/s floor
+    const result = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 100,
+      moving_time: 35,
+      max_speed: 6.0,
+      average_speed: 2.86, // above 2.0 but below 4.0 — rejected for long intervals
+    });
+    expect(result).toBeNull();
+  });
 });
 
 describe('SprintParser.parseTrackSession — 400m upper-distance filter', () => {
