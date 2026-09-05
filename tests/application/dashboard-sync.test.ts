@@ -18,6 +18,12 @@ import {
   FIXTURE_BEST_ANY_VMAX,
   FIXTURE_FLYS_STREAM_VMAX,
   RUN_ACTIVITY_IDS,
+  buildRestDayScenario,
+  REST_DAY_TODAY,
+  REST_DAY_LAST_RUN,
+  withProjectedFutureRows,
+  PROJECTED_TOMORROW,
+  FIXTURE_TODAY,
 } from '../fixtures/intervals-api';
 
 /**
@@ -546,5 +552,93 @@ describe('buildDashboardState — calibration from known race times', () => {
 
     expect(Math.abs(est200.predictedTime - 31.0)).toBeLessThan(1.0);
     expect(est200.confidence).toBe('high');
+  });
+});
+
+describe('buildDashboardState — training stress balance currency', () => {
+  /**
+   * TSB gates the strength prescription, the readiness card, the race-estimate
+   * readiness modifier and the stale-Vmax check. Reading it off the last
+   * *activity* freezes it on the training day, so an athlete who has since
+   * rested is still told they are tired — precisely when ATL is decaying
+   * fastest and the reading matters most.
+   */
+  async function syncRestDay(wellnessCarriesLoad = true) {
+    const { activities, wellness } = buildRestDayScenario(wellnessCarriesLoad);
+    const api = createIntervalsApiStub({ activities, wellness });
+    return buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+  }
+
+  it('reports today\'s TSB, not the TSB of the last training day', async () => {
+    const state = await syncRestDay();
+    expect(state.tsb).toBeCloseTo(REST_DAY_TODAY.tsb, 2);
+    expect(state.tsb).not.toBeCloseTo(REST_DAY_LAST_RUN.tsb, 1);
+  });
+
+  it('calls a recovered athlete fresh rather than tired', async () => {
+    // The whole complaint: three rest days later, TSB has crossed back above
+    // zero, but the strength card still prescribed plyometrics.
+    const state = await syncRestDay();
+    expect(state.strengthZone).toBe('fresh');
+  });
+
+  it('lets the recovery window reflect today\'s fatigue', async () => {
+    const state = await syncRestDay();
+    // Age 49 → 102h age tax. A fresh athlete should sit near the floor, not be
+    // penalised for fatigue that has already dissipated.
+    expect(state.recoveryHours).toBeLessThan(130);
+  });
+
+  it('falls back to the last activity when wellness carries no load data', async () => {
+    const state = await syncRestDay(false);
+    expect(state.tsb).toBeCloseTo(REST_DAY_LAST_RUN.tsb, 2);
+    expect(state.strengthZone).toBe('tired');
+  });
+
+  it('charts TSB decaying across rest days instead of holding the last value', async () => {
+    const { activities, wellness } = buildRestDayScenario();
+    const api = createIntervalsApiStub({ activities, wellness });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    const lastFour = state.dailyTimeSeries.slice(-4).map((d) => d.tsb);
+    expect(lastFour.every((v) => v != null)).toBe(true);
+    // Strictly rising as fatigue dissipates, rather than four identical points.
+    for (let i = 1; i < lastFour.length; i++) {
+      expect(lastFour[i]!).toBeGreaterThan(lastFour[i - 1]!);
+    }
+    expect(lastFour.at(-1)!).toBeCloseTo(REST_DAY_TODAY.tsb, 1);
+  });
+
+  it('still agrees with the activity record on a day that was trained', async () => {
+    // The base fixture has a run today, so both sources describe the same day
+    // and the displayed TSB must not move.
+    const state = await sync();
+    expect(state.tsb).toBeCloseTo(-1.0, 1);
+  });
+});
+
+describe('buildDashboardState — projected wellness rows', () => {
+  /**
+   * Intervals.icu serves forecast rows for future dates, derived from planned
+   * calendar workouts. Treating one as the current state would report an
+   * athlete as recovered on the strength of a rest day they have not had yet.
+   */
+  it('ignores a forecast row when reading today\'s training load', async () => {
+    const api = createIntervalsApiStub({ wellness: withProjectedFutureRows(buildWellnessSeries()) });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    const baseline = await sync();
+    expect(state.tsb).toBeCloseTo(baseline.tsb, 5);
+    expect(state.tsb).not.toBeCloseTo(PROJECTED_TOMORROW.tsb, 1);
+    expect(state.strengthZone).toBe(baseline.strengthZone);
+  });
+
+  it('does not chart forecast rows', async () => {
+    const api = createIntervalsApiStub({ wellness: withProjectedFutureRows(buildWellnessSeries()) });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    expect(state.dailyTimeSeries).toHaveLength(60);
+    expect(state.dailyTimeSeries.at(-1)!.date).toBe(FIXTURE_TODAY);
+    expect(state.dailyTimeSeries.at(-1)!.tsb).not.toBeCloseTo(PROJECTED_TOMORROW.tsb, 1);
   });
 });

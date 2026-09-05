@@ -243,8 +243,20 @@ const demoActivities: IntervalsActivity[] = WINDOW
   }))
   .sort((a, b) => (b.start_date_local ?? '').localeCompare(a.start_date_local ?? ''));
 
-/** Wellness entries, oldest-first — again matching the live API's ordering. */
-const demoWellness = WINDOW.map((d) => ({ id: d.date, date: d.date, hrv: d.hrv }));
+/**
+ * Wellness entries, oldest-first — again matching the live API's ordering.
+ *
+ * These carry CTL and ATL for every day, including rest days, which is what
+ * lets fitness and fatigue stay current between sessions. Sourcing them from
+ * activities instead would freeze the demo's TSB on each training day.
+ */
+const demoWellness = WINDOW.map((d) => ({
+  id: d.date,
+  date: d.date,
+  hrv: d.hrv,
+  ctl: parseFloat(d.ctl.toFixed(3)),
+  atl: parseFloat(d.atl.toFixed(3)),
+}));
 
 /**
  * Rep-level data for the recent sprint sessions.
@@ -286,7 +298,10 @@ const avgVmax = SilverSprintLogic.calculateVmaxBaseline(priorVmaxes, windowBestV
 const nfi = SilverSprintLogic.calculateNFI(todayVmax, avgVmax);
 const nfiStatus = SilverSprintLogic.getNFIStatus(nfi);
 
-const tsb = parseFloat(((latestRun?.icu_ctl ?? 0) - (latestRun?.icu_atl ?? 0)).toFixed(1));
+// Today's fitness and fatigue, as the live app now reads them — from the
+// current wellness row rather than the last training day.
+const todayLoad = WINDOW[WINDOW.length - 1];
+const tsb = parseFloat((todayLoad.ctl - todayLoad.atl).toFixed(1));
 
 const recentHRVs = [...WINDOW].reverse().slice(0, 7).map((d) => d.hrv).filter((h): h is number => h != null);
 const avgHRV7d = recentHRVs.reduce((a, b) => a + b, 0) / recentHRVs.length;

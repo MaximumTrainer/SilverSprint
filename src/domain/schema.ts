@@ -50,6 +50,16 @@ export const IntervalsWellnessSchema = z.object({
   restingHR: z.number().nullable().optional(),
   readiness: z.number().nullable().optional(),
   weight: z.number().nullable().optional(),
+  /**
+   * Chronic Training Load (Fitness) for this calendar day.
+   *
+   * The wellness endpoint has a row for **every** day, trained or not, so this
+   * is the only source that stays current while an athlete rests. The copies
+   * carried on an activity are frozen at the moment that activity was recorded.
+   */
+  ctl: z.number().nullable().optional(),
+  /** Acute Training Load (Fatigue) for this calendar day. @see ctl */
+  atl: z.number().nullable().optional(),
 });
 
 export type IntervalsWellness = z.infer<typeof IntervalsWellnessSchema>;

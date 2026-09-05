@@ -220,6 +220,90 @@ export const FIXTURE_RECENT_HRV_MEAN = 29.571428571428573;
 /** Mean HRV over the 7 *oldest* wellness days — what the ordering bug produces instead. */
 export const FIXTURE_OLDEST_HRV_MEAN = 20.571428571428573;
 
+// ── rest-day scenario ───────────────────────────────────────────────────────
+
+/**
+ * Three rest days after a hard session — the case where a stale TSB is
+ * visible.
+ *
+ * On a real account the two sources disagree while the athlete recovers:
+ *   - the last *activity* keeps the CTL/ATL it had on the day it was recorded
+ *   - the *wellness* record has a row for every day, so ATL keeps decaying
+ *
+ * Here the last run was three days ago at TSB −19.0, while today's wellness
+ * row has decayed to TSB +2.3. Reading fatigue off the activity therefore
+ * reports a tired athlete who has in fact recovered.
+ */
+export const REST_DAY_LAST_RUN = { ctl: 39.92, atl: 58.93, tsb: -19.01 };
+export const REST_DAY_TODAY = { ctl: 36.69, atl: 34.38, tsb: 2.31 };
+
+/** ATL decaying across the rest days, newest last. */
+const REST_DAY_DECAY = [
+  { daysAgo: 3, ctl: 39.92, atl: 58.93 },
+  { daysAgo: 2, ctl: 39.31, atl: 52.95 },
+  { daysAgo: 1, ctl: 38.05, atl: 42.98 },
+  { daysAgo: 0, ctl: REST_DAY_TODAY.ctl, atl: REST_DAY_TODAY.atl },
+];
+
+export interface RestDayScenario {
+  activities: Record<string, unknown>[];
+  wellness: Record<string, unknown>[];
+}
+
+/**
+ * Build the payloads for "hard session three days ago, nothing since".
+ *
+ * @param wellnessCarriesLoad when false, the wellness rows omit ctl/atl — the
+ *   shape returned by accounts where Intervals.icu has no load data, which the
+ *   app must fall back from rather than treating as zero fitness.
+ */
+export function buildRestDayScenario(wellnessCarriesLoad = true): RestDayScenario {
+  // Drop everything from the last two days so the newest run is three days old.
+  const activities = ACTIVITY_CATALOGUE
+    .filter((a) => a.daysAgo >= 3)
+    .map((a) => ({
+      id: a.id,
+      type: a.type,
+      name: a.name,
+      start_date_local: localTimestamp(a.daysAgo),
+      distance: a.distance,
+      moving_time: a.moving_time,
+      max_speed: a.max_speed,
+      icu_training_load: a.icu_training_load,
+      // Stamp the newest run with the fatigue it carried on the training day.
+      icu_atl: a.daysAgo === 3 || a.daysAgo === 5 ? REST_DAY_LAST_RUN.atl : a.icu_atl,
+      icu_ctl: a.daysAgo === 3 || a.daysAgo === 5 ? REST_DAY_LAST_RUN.ctl : a.icu_ctl,
+    }));
+
+  const decayByDate = new Map(REST_DAY_DECAY.map((d) => [isoDate(d.daysAgo), d]));
+  const wellness = buildWellnessSeries().map((entry) => {
+    const decayed = decayByDate.get(entry.id as string);
+    const base = decayed ? { ...entry, ctl: decayed.ctl, atl: decayed.atl } : entry;
+    if (wellnessCarriesLoad) return base;
+    const { ctl, atl, ...withoutLoad } = base as Record<string, unknown>;
+    return withoutLoad;
+  });
+
+  return { activities, wellness };
+}
+
+/**
+ * Forward-projected wellness rows, as Intervals.icu serves them.
+ *
+ * Future dates carry a CTL/ATL forecast derived from planned calendar
+ * workouts. They have no HRV and share one generation timestamp — they are
+ * predictions, not measurements, and must never be read as today's state.
+ */
+export const PROJECTED_TOMORROW = { ctl: 40.0, atl: 24.0, tsb: 16.0 };
+
+export function withProjectedFutureRows(wellness: Record<string, unknown>[]): Record<string, unknown>[] {
+  return [
+    ...wellness,
+    { id: isoDate(-1), hrv: null, ctl: PROJECTED_TOMORROW.ctl, atl: PROJECTED_TOMORROW.atl, updated: `${FIXTURE_TODAY}T09:21:08.783+00:00` },
+    { id: isoDate(-2), hrv: null, ctl: 39.4, atl: 23.1, updated: `${FIXTURE_TODAY}T09:21:08.783+00:00` },
+  ];
+}
+
 // ── activity intervals ──────────────────────────────────────────────────────
 
 /**

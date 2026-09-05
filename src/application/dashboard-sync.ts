@@ -226,11 +226,21 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
   const hrvData: HRVData = { currentHRV, avgHRV7d };
 
   // 6. Calculate TSB and Strength Zone (§3.3).
-  // This raw activity-level TSB is used for the strength prescription,
-  // race estimation, and UI display.  Recovery uses recoveryTSB (below),
-  // which is further adjusted with interval-level training load data.
-  const latestATL = latestSession?.icu_atl || 0;
-  const latestCTL = latestSession?.icu_ctl || 0;
+  //
+  // Fitness and fatigue are read from **today's wellness row**, not from the
+  // most recent activity. An activity carries the CTL/ATL it had on the day it
+  // was recorded, so sourcing them from it freezes TSB on the last training
+  // day: after two or three rest days the athlete has recovered, ATL has
+  // decayed and TSB may have crossed back above zero, yet the dashboard would
+  // still report the fatigue they were carrying when they last trained — and
+  // prescribe accordingly. The wellness endpoint has a row for every calendar
+  // day, so it stays current while an athlete rests.
+  //
+  // Accounts whose wellness rows carry no load data fall back to the activity
+  // values, which is the previous behaviour and still better than zero.
+  const load = selectCurrentTrainingLoad(wellnessEntries, latestSession, todayDate);
+  const latestATL = load.atl;
+  const latestCTL = load.ctl;
   const tsb = latestCTL - latestATL;
   const strengthRx = SilverSprintLogic.getStrengthPrescription(tsb);
 
@@ -482,6 +492,32 @@ function extractHRV(w: { rmssd?: number | null; hrv?: number | null }): number |
   return w.hrv ?? w.rmssd ?? undefined;
 }
 
+/**
+ * Pick the training-load figures that describe **today**.
+ *
+ * Prefers the most recent wellness row that carries both CTL and ATL, since
+ * those exist for every calendar day. Falls back to the copies stamped on the
+ * latest activity when the account has no wellness load data.
+ */
+function selectCurrentTrainingLoad(
+  wellnessEntries: IntervalsWellness[],
+  latestSession: IntervalsActivity | undefined,
+  today: string,
+): { ctl: number; atl: number } {
+  // Intervals.icu also serves **forward-projected** wellness rows: future dates
+  // carry a CTL/ATL forecast derived from planned calendar workouts, with no
+  // HRV and a shared generation timestamp. Those are predictions, not
+  // measurements, so anything dated after today is ignored — otherwise a
+  // planned rest day tomorrow would report the athlete as already recovered.
+  // wellnessEntries is sorted newest-first, so the first eligible row wins.
+  const current = wellnessEntries.find(
+    (w) => typeof w.ctl === 'number' && typeof w.atl === 'number' && (w.date || w.id || '') <= today,
+  );
+  if (current) return { ctl: current.ctl as number, atl: current.atl as number };
+
+  return { ctl: latestSession?.icu_ctl || 0, atl: latestSession?.icu_atl || 0 };
+}
+
 /** Wellness entries key their date on `date`, falling back to the `id` field. */
 function wellnessDate(w: IntervalsWellness): string {
   return w.date || w.id || '';
@@ -525,7 +561,7 @@ export function ageFromDob(dob: string | null | undefined, now: Date): number {
  */
 export function buildDailyTimeSeries(
   activities: IntervalsActivity[],
-  wellnessEntries: Array<{ id: string; date?: string; hrv?: number | null; rmssd?: number | null }>,
+  wellnessEntries: Array<{ id: string; date?: string; hrv?: number | null; rmssd?: number | null; ctl?: number | null; atl?: number | null }>,
   avgVmax: number,
   avgHRV7d: number,
   age: number,
@@ -536,6 +572,20 @@ export function buildDailyTimeSeries(
   for (const act of activities) {
     const dateStr = act.start_date_local?.split('T')[0];
     if (dateStr && !actByDate.has(dateStr)) actByDate.set(dateStr, act);
+  }
+
+  // Per-day fitness/fatigue from the wellness rows. These exist for every
+  // calendar day, so the TSB line keeps decaying through a rest block instead
+  // of holding the last training day's value flat.
+  // Projected future rows are excluded here too — the chart plots what
+  // happened, not what Intervals.icu forecasts from planned workouts.
+  const todayStr = formatDateDaysAgo(now, 0);
+  const loadByDate = new Map<string, number>();
+  for (const w of wellnessEntries) {
+    const dateStr = w.date || w.id;
+    if (dateStr && dateStr <= todayStr && typeof w.ctl === 'number' && typeof w.atl === 'number') {
+      if (!loadByDate.has(dateStr)) loadByDate.set(dateStr, w.ctl - w.atl);
+    }
   }
 
   // Build HRV map and a date-sorted array for per-day rolling window.
@@ -566,7 +616,11 @@ export function buildDailyTimeSeries(
     const nfi = act && avgVmax > 0 && act.max_speed != null && act.max_speed > 0
       ? act.max_speed / avgVmax
       : null;
-    const tsb: number | null = act ? (act.icu_ctl - act.icu_atl) : lastTsb;
+    // Wellness first — it has a row for rest days too. Only when the account
+    // carries no load data do we fall back to the activity, and then to
+    // carrying the previous day forward.
+    const tsb: number | null = loadByDate.get(dateStr)
+      ?? (act ? act.icu_ctl - act.icu_atl : lastTsb);
     if (tsb != null) lastTsb = tsb;
 
     // Per-day rolling 7d HRV avg using only entries up to and including this day

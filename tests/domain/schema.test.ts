@@ -200,6 +200,32 @@ describe('IntervalsWellnessSchema', () => {
       expect(result.data.rmssd).toBeNull();
     }
   });
+
+  it('carries the CTL and ATL for that day', () => {
+    // Every calendar day has a wellness row, trained or not, which makes this
+    // the only source of fitness/fatigue that stays current through a rest
+    // block. The copies on an activity are frozen at the training day.
+    const result = IntervalsWellnessSchema.safeParse({
+      id: '2026-09-06',
+      hrv: 24,
+      ctl: 36.69,
+      atl: 34.38,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.ctl).toBe(36.69);
+      expect(result.data.atl).toBe(34.38);
+    }
+  });
+
+  it('accepts a wellness row from an account with no load data', () => {
+    const result = IntervalsWellnessSchema.safeParse({ id: '2026-09-06', hrv: 24, ctl: null, atl: null });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.ctl).toBeNull();
+    }
+    expect(IntervalsWellnessSchema.safeParse({ id: '2026-09-06', hrv: 24 }).success).toBe(true);
+  });
 });
 
 /**

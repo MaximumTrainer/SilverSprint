@@ -348,13 +348,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <div className="icu-stat" style={{ borderLeft: `3px solid ${getStrengthZoneColor(strengthZone)}` }}>
             <div className="icu-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Dumbbell size={14} style={{ color: getStrengthZoneColor(strengthZone) }} /> Strength Zone
-              <InfoTooltip text="Based on Training Stress Balance (TSB). Fresh (TSB ≥ 0): Max Strength — high intensity, low volume. Tired (TSB −10 to −20): Plyometrics — moderate intensity. Fatigued (TSB < −20): Rest or active mobility only." />
+              <InfoTooltip text="Prescribes your next strength session from overall Training Stress Balance — fitness minus fatigue across all your training, not just lifting. Any load (sprints, runs, rides, walks) moves it. Fresh (TSB ≥ 0): Max Strength — high intensity, low volume. Tired (TSB 0 to −20): Plyometrics — moderate intensity. Fatigued (TSB below −20): Rest or active mobility only." />
             </div>
             <div className="icu-stat-value" style={{ color: getStrengthZoneColor(strengthZone), textTransform: 'capitalize' }}>
               {strengthZone}
             </div>
             <div style={{ fontSize: 11, color: 'var(--icu-text-disabled)', marginTop: 2 }}>
-              TSB {athleteData.tsb > 0 ? '+' : ''}{athleteData.tsb.toFixed(2)} · {strengthZoneLabel}
+              TSB {athleteData.tsb > 0 ? '+' : ''}{athleteData.tsb.toFixed(2)} (all training) · {strengthZoneLabel}
             </div>
           </div>
 

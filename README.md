@@ -72,10 +72,16 @@ Workouts include warmup, main set with coaching cues, and cooldown. Each can be 
 
 ### TSB-Driven Strength Periodization
 
+TSB is **fitness minus fatigue across all training**, not strength-specific
+load — sprints, easy runs, rides and walks all move it, so the zone can read
+"Tired" in a week containing no lifting at all. It is read from the day's
+wellness record rather than from the last activity, so it keeps improving
+through a rest block instead of freezing on the last training day.
+
 | TSB Zone | Prescription | Example Exercises |
 |---|---|---|
 | ≥ 0 (Fresh) | Max Strength — 3×3 @ 85% | Trap Bar Deadlift, Weighted Step-Up, Hang Power Clean |
-| −10 to −20 (Tired) | Stiffened Plyometrics — bodyweight | Pogo Jumps, Hurdle Hops, Single-Leg Bounds |
+| 0 to −20 (Tired) | Stiffened Plyometrics — bodyweight | Pogo Jumps, Hurdle Hops, Single-Leg Bounds |
 | < −20 (Fatigued) | Active Mobility only | Foam Rolling, Hip Flexor Stretch, Walking |
 
 Loads are auto-estimated from your body weight (pulled from your Intervals.icu profile).
