@@ -259,6 +259,8 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │       └── recovery-modalities.ts   # Tempo, breathing, hydrotherapy
 │   ├── application/
 │   │   └── dashboard-sync.ts    # buildDashboardState use case (HttpGet port)
+│   ├── data/
+│   │   └── mockDashboardData.ts # Simulated athlete powering demo mode
 │   └── hooks/
 │       ├── useIntervalsData.ts  # React adapter over buildDashboardState
 │       └── useRaceResults.ts    # Known race times + per-athlete persistence
@@ -274,6 +276,28 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 ├── vitest.config.ts             # Test runner config
 └── vercel.json                  # Vercel deployment rewrites
 ```
+
+---
+
+## Demo Mode
+
+Unauthenticated visitors see a full dashboard built from a simulated athlete
+(`src/data/mockDashboardData.ts`). The simulation produces a **training
+calendar** — sessions, loads, rest days, a deload week, a travel gap, a build
+block — and then feeds it through the same domain modules the live app uses:
+
+- CTL and ATL are genuine 42-day and 7-day exponential moving averages of daily
+  load, so TSB steps on training days and drifts up through easy weeks.
+- Sprint Vmax responds to accumulated fatigue, which is what moves the NFI.
+- Recovery hours, SRS, race estimates and the race plan all come from the real
+  domain functions, so no figure appears that the model could not produce.
+- Days without a run carry no NFI, and two nights have no HRV — the same gaps a
+  real wellness history has.
+
+Values are deterministic (a seeded PRNG, never `Math.random`), so the demo is
+identical on every load and screenshots are reproducible. `tests/data/` pins the
+consistency properties, including that the demo can never show a recovery window
+below the athlete's own age tax.
 
 ---
 
