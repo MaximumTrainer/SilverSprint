@@ -64,12 +64,8 @@ function createRandom(seed: number): () => number {
   };
 }
 
-const random = createRandom(0x5119e5);
-
-/** Symmetric noise in [-spread, +spread]. */
-function jitter(spread: number): number {
-  return (random() * 2 - 1) * spread;
-}
+/** Fixed seed — the demo must look identical on every load. */
+const DEMO_SEED = 0x5119e5;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -95,22 +91,27 @@ const SESSION_LOAD: Record<SessionKind, number> = {
  * of them are quality — which is why the neural-readiness chart is dominated by
  * genuine sprint efforts rather than jogging noise.
  *
- * Index 0 is Sunday, matching `Date.getDay()`.
+ * Indexed by **days before today**, not by calendar weekday. Phase-locking the
+ * week to today keeps the demo in one fixed state whatever day it is opened and
+ * whatever timezone the viewer is in; keying it to `Date.getDay()` instead made
+ * the athlete's readiness drift between green and amber as the real week turned,
+ * which is a demo that changes character at midnight and a test that fails only
+ * on certain days.
  */
 const WEEK_TEMPLATE: SessionKind[] = [
-  'walk',        // Sun — long walk
-  'gym',         // Mon — max strength
-  'sprint-max',  // Tue — max velocity
-  'walk',        // Wed — recovery walk
-  'gym',         // Thu — strength + drills
-  'rest',        // Fri — full rest
-  'sprint-se',   // Sat — speed endurance
+  'walk',        // today — recovery walk
+  'sprint-se',   // 1 day ago — speed endurance
+  'rest',        // 2 days ago
+  'gym',         // 3 days ago — strength + drills
+  'walk',        // 4 days ago
+  'sprint-max',  // 5 days ago — max velocity
+  'gym',         // 6 days ago — max strength
 ];
 
-/** A tempo run replaces the Thursday gym session every third week. */
+/** A tempo run replaces a gym session every third week. */
 const TEMPO_WEEK_INTERVAL = 3;
 
-interface SimulatedDay {
+export interface SimulatedDay {
   /** Days before today; 0 is today. */
   daysAgo: number;
   date: string;
@@ -139,7 +140,14 @@ function isoDate(daysAgo: number, today: Date): string {
  * Sprint Vmax then responds to that accumulated fatigue, which is what makes
  * the Neural Fatigue Index move at all.
  */
-function simulateTraining(today: Date): SimulatedDay[] {
+export function simulateTraining(today: Date): SimulatedDay[] {
+  // The generator is seeded per call rather than sharing a module-level
+  // stream, so `simulateTraining` is a pure function of its argument. A shared
+  // stream would make a second call return different noise from the first —
+  // reproducible only if nothing else ever drew from it.
+  const random = createRandom(DEMO_SEED);
+  const jitter = (spread: number) => (random() * 2 - 1) * spread;
+
   const days: SimulatedDay[] = [];
 
   // Seed the averages near a plausible mid-season fitness level.
@@ -149,11 +157,11 @@ function simulateTraining(today: Date): SimulatedDay[] {
 
   for (let daysAgo = WINDOW_DAYS + BURN_IN_DAYS; daysAgo >= 0; daysAgo--) {
     const date = isoDate(daysAgo, today);
-    const weekday = new Date(`${date}T12:00:00`).getDay();
-    const weekIndex = Math.floor((WINDOW_DAYS + BURN_IN_DAYS - daysAgo) / 7);
+    const phase = daysAgo % 7;
+    const weekIndex = Math.floor(daysAgo / 7);
 
-    let kind = WEEK_TEMPLATE[weekday];
-    if (kind === 'gym' && weekday === 4 && weekIndex % TEMPO_WEEK_INTERVAL === 0) {
+    let kind = WEEK_TEMPLATE[phase];
+    if (kind === 'gym' && phase === 3 && weekIndex % TEMPO_WEEK_INTERVAL === 1) {
       kind = 'tempo';
     }
 
@@ -171,7 +179,7 @@ function simulateTraining(today: Date): SimulatedDay[] {
 
     let load = SESSION_LOAD[kind];
     if (isDeload) load *= 0.45;
-    if (inBuildBlock) load *= 1.65;
+    if (inBuildBlock) load *= 1.3;
     load = Math.round(load * (1 + jitter(0.1)));
 
     // Standard training-load impulse response: 42-day fitness, 7-day fatigue.
@@ -215,11 +223,21 @@ function simulateTraining(today: Date): SimulatedDay[] {
   return days;
 }
 
-const TODAY = (() => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
+/**
+ * Reference "today", pinned to midday UTC.
+ *
+ * Both this module and the app's own `formatDateDaysAgo` derive their date
+ * strings with `toISOString()`. Anchoring at local midnight made those two
+ * disagree by a day for any viewer east of UTC, which shifted the whole
+ * simulated calendar; midday UTC is unambiguous everywhere the app runs.
+ */
+export function demoReferenceDate(now: Date = new Date()): Date {
+  const d = new Date(now);
+  d.setUTCHours(12, 0, 0, 0);
   return d;
-})();
+}
+
+const TODAY = demoReferenceDate();
 
 const SIMULATED_DAYS = simulateTraining(TODAY);
 

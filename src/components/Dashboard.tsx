@@ -2,12 +2,13 @@ import React, { useState, useMemo } from 'react';
 import {
   Zap, Activity, Dumbbell, User, LogOut, Send, Clock, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Info, Timer, Flag, Calendar, Trophy,
 } from 'lucide-react';
-import { SilverSprintLogic, NFIStatus } from '../domain/sprint/core';
+import { SilverSprintLogic, NFIStatus, STRENGTH_ZONE_BANDS, getStrengthZoneBand } from '../domain/sprint/core';
 import { StrengthPeriodization } from '../domain/sprint/periodization';
 import { SprintWorkoutGenerator, SprintWorkout, isStaleVmax } from '../domain/sprint/workouts';
 import { RaceEstimate } from '../domain/sprint/race-estimator';
 import { RaceCalibration, RaceResult } from '../domain/sprint/race-results';
 import { RaceResultsPanel } from './RaceResultsPanel';
+import { StrengthZoneScale } from './StrengthZoneScale';
 import { SprintRacePlan, PriorRaceContext } from '../domain/sprint/race-plan';
 import type { TrainingPlanContext } from '../domain/sprint/training-plan';
 import { TimeSeriesChart } from './TimeSeriesChart';
@@ -191,6 +192,17 @@ const SessionPushItem: React.FC<{
   );
 };
 
+/**
+ * Tooltip copy generated from the band definitions rather than restated, so it
+ * can never disagree with the thresholds the prescription actually uses.
+ */
+const STRENGTH_ZONE_TOOLTIP = [
+  'Prescribes your next strength session from overall Training Stress Balance —',
+  'fitness minus fatigue across all your training, not just lifting. Any load',
+  '(sprints, runs, rides, walks) moves it.',
+  ...STRENGTH_ZONE_BANDS.map((b) => `${b.label} (TSB ${b.range}): ${b.focus}.`),
+].join(' ');
+
 const InfoTooltip: React.FC<{ text: string }> = ({ text }) => (
   <span className="icu-tooltip-wrapper" style={{ marginLeft: 4 }}>
     <Info size={12} style={{ color: 'var(--icu-text-disabled)' }} />
@@ -254,6 +266,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const strengthZone = prescription.zone;
   const strengthZoneLabel = strengthZone === 'fresh' ? 'Max Strength' : strengthZone === 'tired' ? 'Plyometric' : 'Recovery';
+  const strengthBand = getStrengthZoneBand(athleteData.tsb);
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--icu-bg)', color: 'var(--icu-text)' }}>
@@ -348,13 +361,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <div className="icu-stat" style={{ borderLeft: `3px solid ${getStrengthZoneColor(strengthZone)}` }}>
             <div className="icu-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Dumbbell size={14} style={{ color: getStrengthZoneColor(strengthZone) }} /> Strength Zone
-              <InfoTooltip text="Prescribes your next strength session from overall Training Stress Balance — fitness minus fatigue across all your training, not just lifting. Any load (sprints, runs, rides, walks) moves it. Fresh (TSB ≥ 0): Max Strength — high intensity, low volume. Tired (TSB 0 to −20): Plyometrics — moderate intensity. Fatigued (TSB below −20): Rest or active mobility only." />
+              <InfoTooltip text={STRENGTH_ZONE_TOOLTIP} />
             </div>
             <div className="icu-stat-value" style={{ color: getStrengthZoneColor(strengthZone), textTransform: 'capitalize' }}>
               {strengthZone}
             </div>
             <div style={{ fontSize: 11, color: 'var(--icu-text-disabled)', marginTop: 2 }}>
-              TSB {athleteData.tsb > 0 ? '+' : ''}{athleteData.tsb.toFixed(2)} (all training) · {strengthZoneLabel}
+              TSB {athleteData.tsb > 0 ? '+' : ''}{athleteData.tsb.toFixed(2)} · {strengthBand.range} · {strengthZoneLabel}
+            </div>
+            <StrengthZoneScale tsb={athleteData.tsb} />
+            <div style={{ fontSize: 10, color: 'var(--icu-text-disabled)', marginTop: 4, lineHeight: 1.4 }}>
+              {strengthBand.guidance}
+            </div>
+            <div style={{ fontSize: 9, color: 'var(--icu-text-disabled)', marginTop: 2, fontStyle: 'italic' }}>
+              From all training load, not strength work alone
             </div>
           </div>
 

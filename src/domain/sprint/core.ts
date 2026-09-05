@@ -15,6 +15,72 @@ const RECOVERY_SRS_MAX_PENALTY_HOURS = 48;
  */
 const SPRINT_SESSION_VMAX_FRACTION = 0.85;
 
+/**
+ * TSB is fitness minus fatigue across **all** training — sprints, easy runs,
+ * rides and walks all move it. It is not a measure of strength-specific load,
+ * so the zone can read "Tired" in a week containing no lifting at all.
+ */
+export interface StrengthZoneBand {
+  zone: StrengthPrescription['zone'];
+  intensity: StrengthPrescription['intensity'];
+  /** Title-case name shown to the athlete. */
+  label: string;
+  /** Prescription summary. */
+  focus: string;
+  /** Inclusive lower bound of the band's TSB range. */
+  min: number;
+  /** Exclusive upper bound. */
+  max: number;
+  /** Human-readable range, e.g. "0 to −20". */
+  range: string;
+  /** One-line explanation of what the athlete should do. */
+  guidance: string;
+}
+
+/**
+ * The three TSB bands, ordered freshest first.
+ *
+ * Single source of truth: the prescription, the dashboard scale and the README
+ * all read these, so a threshold can only be changed in one place.
+ */
+export const STRENGTH_ZONE_BANDS: readonly StrengthZoneBand[] = [
+  {
+    zone: 'fresh',
+    intensity: 'high',
+    label: 'Fresh',
+    focus: 'Max Strength — High Intensity, Low Volume',
+    min: 0,
+    max: Infinity,
+    range: '0 or above',
+    guidance: 'Heavy lifting is on the table — high intensity, low volume.',
+  },
+  {
+    zone: 'tired',
+    intensity: 'moderate',
+    label: 'Tired',
+    focus: 'Stiffened Plyometrics — Moderate Intensity',
+    min: -20,
+    max: 0,
+    range: '0 to −20',
+    guidance: 'Carrying fatigue — bodyweight plyometrics rather than heavy lifts.',
+  },
+  {
+    zone: 'fatigued',
+    intensity: 'none',
+    label: 'Fatigued',
+    focus: 'Rest or Active Mobility only',
+    min: -Infinity,
+    max: -20,
+    range: 'below −20',
+    guidance: 'Deeply fatigued — rest or active mobility only.',
+  },
+];
+
+/** The band a given TSB falls in. */
+export function getStrengthZoneBand(tsb: number): StrengthZoneBand {
+  return STRENGTH_ZONE_BANDS.find((b) => tsb >= b.min && tsb < b.max) ?? STRENGTH_ZONE_BANDS[1];
+}
+
 export class SilverSprintLogic {
   /** @see SPRINT_SESSION_VMAX_FRACTION */
   static readonly SPRINT_SESSION_VMAX_FRACTION = SPRINT_SESSION_VMAX_FRACTION;
@@ -131,31 +197,16 @@ export class SilverSprintLogic {
   }
 
   /**
-   * §3.3 — Strength Training Auto-Regulation
-   * TSB > 0 → Fresh: High Intensity, Low Volume (Max Strength)
-   * TSB -10 to -20 → Tired: Moderate Intensity (Stiffened Plyometrics)
-   * TSB < -20 → Fatigued: Rest or Active Mobility only
+   * §3.3 — Strength Training Auto-Regulation.
+   *
+   * Derived from {@link STRENGTH_ZONE_BANDS} rather than repeating the
+   * thresholds, so the prescription, the UI scale and the docs cannot drift
+   * apart — they previously did, with the tooltip advertising a "tired" band of
+   * −10 to −20 while the code used 0 to −20.
    */
   static getStrengthPrescription(tsb: number): StrengthPrescription {
-    if (tsb >= 0) {
-      return {
-        zone: 'fresh',
-        intensity: 'high',
-        focus: 'Max Strength — High Intensity, Low Volume',
-      };
-    }
-    if (tsb >= -20) {
-      return {
-        zone: 'tired',
-        intensity: 'moderate',
-        focus: 'Stiffened Plyometrics — Moderate Intensity',
-      };
-    }
-    return {
-      zone: 'fatigued',
-      intensity: 'none',
-      focus: 'Rest or Active Mobility only',
-    };
+    const band = getStrengthZoneBand(tsb);
+    return { zone: band.zone, intensity: band.intensity, focus: band.focus };
   }
 
   /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SilverSprintLogic } from '../../../src/domain/sprint/core';
+import { SilverSprintLogic, STRENGTH_ZONE_BANDS, getStrengthZoneBand } from '../../../src/domain/sprint/core';
 
 /**
  * Tests for README §3.2 — Neural Fatigue Index, Sprint Recovery Score & Age Tax
@@ -387,5 +387,71 @@ describe('SilverSprintLogic.calculateVmaxBaseline', () => {
     // Exactly on the threshold qualifies; a hair below does not.
     expect(SilverSprintLogic.calculateVmaxBaseline([8.5], 10)).toBe(8.5);
     expect(SilverSprintLogic.calculateVmaxBaseline([8.49], 10)).toBeNull();
+  });
+});
+
+/**
+ * §3.3 — Strength zone bands.
+ *
+ * The thresholds were previously duplicated in the tooltip and the README,
+ * where they drifted: both advertised a "Tired" band of −10 to −20 while the
+ * code used 0 to −20, so an athlete at TSB −1 saw "Tired" alongside a tooltip
+ * saying they should be Fresh. These tests pin the labels to the logic.
+ */
+describe('STRENGTH_ZONE_BANDS', () => {
+  it('covers the whole TSB number line with no gaps or overlaps', () => {
+    const sorted = [...STRENGTH_ZONE_BANDS].sort((a, b) => a.min - b.min);
+    expect(sorted[0].min).toBe(-Infinity);
+    expect(sorted.at(-1)!.max).toBe(Infinity);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i].min).toBe(sorted[i - 1].max);
+    }
+  });
+
+  it('agrees with the prescription at every boundary and either side of it', () => {
+    const probes = [-100, -40, -20.01, -20, -19.99, -10, -1, -0.01, 0, 0.01, 5, 50];
+    for (const tsb of probes) {
+      const band = getStrengthZoneBand(tsb);
+      const rx = SilverSprintLogic.getStrengthPrescription(tsb);
+      expect(band.zone, `zone at TSB ${tsb}`).toBe(rx.zone);
+      expect(band.intensity).toBe(rx.intensity);
+      expect(band.focus).toBe(rx.focus);
+    }
+  });
+
+  it('places the boundaries where the prescription does', () => {
+    expect(getStrengthZoneBand(0).zone).toBe('fresh');
+    expect(getStrengthZoneBand(-0.01).zone).toBe('tired');
+    expect(getStrengthZoneBand(-20).zone).toBe('tired');
+    expect(getStrengthZoneBand(-20.01).zone).toBe('fatigued');
+  });
+
+  it('puts a marginally negative TSB in Tired, as the logic does', () => {
+    // The reading that prompted this: TSB −1.05 is Tired, not Fresh. The old
+    // tooltip claimed Tired started at −10, making this look like a bug.
+    const band = getStrengthZoneBand(-1.05);
+    expect(band.zone).toBe('tired');
+    expect(band.range).toContain('0 to');
+  });
+
+  it('gives every band a label, a readable range and guidance', () => {
+    for (const band of STRENGTH_ZONE_BANDS) {
+      expect(band.label.length).toBeGreaterThan(0);
+      expect(band.range.length).toBeGreaterThan(0);
+      expect(band.guidance.length).toBeGreaterThan(0);
+      // Ranges are for humans: no raw Infinity leaking into the UI.
+      expect(band.range).not.toContain('Infinity');
+    }
+  });
+
+  it('describes each band\'s range consistently with its own bounds', () => {
+    const fresh = STRENGTH_ZONE_BANDS.find((b) => b.zone === 'fresh')!;
+    const tired = STRENGTH_ZONE_BANDS.find((b) => b.zone === 'tired')!;
+    const fatigued = STRENGTH_ZONE_BANDS.find((b) => b.zone === 'fatigued')!;
+
+    expect(fresh.range).toContain(String(fresh.min));
+    expect(tired.range).toContain(String(tired.max));
+    expect(tired.range).toContain(String(Math.abs(tired.min)));
+    expect(fatigued.range).toContain(String(Math.abs(fatigued.max)));
   });
 });

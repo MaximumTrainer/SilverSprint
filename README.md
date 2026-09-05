@@ -78,6 +78,12 @@ load — sprints, easy runs, rides and walks all move it, so the zone can read
 wellness record rather than from the last activity, so it keeps improving
 through a rest block instead of freezing on the last training day.
 
+The dashboard shows the full band scale with the athlete's position marked, so
+the verdict comes with its boundaries rather than on its own. Bands, labels and
+ranges all come from `STRENGTH_ZONE_BANDS` in `domain/sprint/core.ts` — the same
+definition the prescription uses, so the UI and the docs cannot drift from the
+thresholds again.
+
 | TSB Zone | Prescription | Example Exercises |
 |---|---|---|
 | ≥ 0 (Fresh) | Max Strength — 3×3 @ 85% | Trap Bar Deadlift, Weighted Step-Up, Hang Power Clean |

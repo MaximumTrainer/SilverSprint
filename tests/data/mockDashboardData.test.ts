@@ -6,6 +6,8 @@ import {
   mockRecoveredEstimates,
   mockSprintRacePlans,
   mockTrainingPlan,
+  simulateTraining,
+  demoReferenceDate,
 } from '../../src/data/mockDashboardData';
 import { SilverSprintLogic } from '../../src/domain/sprint/core';
 
@@ -162,5 +164,63 @@ describe('demo race data', () => {
 
   it('shows uncalibrated estimates, since the demo has no entered race times', () => {
     expect(mockRaceEstimates.every((e) => e.calibration === 'none')).toBe(true);
+  });
+});
+
+describe('demo data — independent of when it is generated', () => {
+  /**
+   * The demo calendar used to be keyed on `Date.getDay()` and local-midnight
+   * `toISOString()`, so the athlete's readiness drifted with the real weekday
+   * and with the viewer's timezone — a demo that changed character overnight,
+   * and a suite that passed locally and failed in CI. Phase-locking the week to
+   * "days before today" removes both.
+   */
+  const REFERENCE_DATES = [
+    '2026-09-05', // Saturday
+    '2026-09-06', // Sunday
+    '2026-09-07', // Monday
+    '2026-09-08', // Tuesday
+    '2026-09-09', // Wednesday
+    '2026-09-10', // Thursday
+    '2026-09-11', // Friday
+    '2027-02-28', // a different month, year and DST state
+  ];
+
+  /** Everything about a simulated day except the calendar date it fell on. */
+  const shape = (date: string) =>
+    simulateTraining(demoReferenceDate(new Date(`${date}T09:30:00Z`)))
+      .map((d) => `${d.daysAgo}:${d.kind}:${d.load}:${d.ctl.toFixed(4)}:${d.atl.toFixed(4)}:${d.vmax ?? '-'}:${d.hrv ?? '-'}`);
+
+  it('produces the same training history whatever day it is generated on', () => {
+    const baseline = shape(REFERENCE_DATES[0]);
+    for (const date of REFERENCE_DATES.slice(1)) {
+      expect(shape(date)).toEqual(baseline);
+    }
+  });
+
+  it('produces the same history regardless of the hour of day', () => {
+    const early = simulateTraining(demoReferenceDate(new Date('2026-09-05T00:15:00Z')));
+    const late = simulateTraining(demoReferenceDate(new Date('2026-09-05T23:45:00Z')));
+    expect(late.map((d) => d.date)).toEqual(early.map((d) => d.date));
+  });
+
+  it('anchors the most recent day to the reference date', () => {
+    const days = simulateTraining(demoReferenceDate(new Date('2026-09-05T09:30:00Z')));
+    const today = days.find((d) => d.daysAgo === 0)!;
+    expect(today.date).toBe('2026-09-05');
+  });
+
+  it('keeps the athlete in the amber band on every weekday', () => {
+    // The property the CI failure actually violated.
+    for (const date of REFERENCE_DATES) {
+      const days = simulateTraining(demoReferenceDate(new Date(`${date}T09:30:00Z`)));
+      const window = days.filter((d) => d.daysAgo <= 60 && d.vmax != null);
+      const todayVmax = window[window.length - 1]!.vmax!;
+      const prior = window.slice(0, -1).map((d) => d.vmax!).reverse().slice(0, 30);
+      const best = Math.max(todayVmax, ...prior);
+      const baseline = SilverSprintLogic.calculateVmaxBaseline(prior, best)!;
+      const status = SilverSprintLogic.getNFIStatus(SilverSprintLogic.calculateNFI(todayVmax, baseline));
+      expect(status, `weekday-independent status for ${date}`).toBe('amber');
+    }
   });
 });
