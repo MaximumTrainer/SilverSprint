@@ -27,6 +27,7 @@ import { SilverSprintLogic } from '../domain/sprint/core';
 import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../domain/sprint/race-estimator';
 import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sprint/race-plan';
 import { SprintTrainingPlan, TrainingPlanContext } from '../domain/sprint/training-plan';
+import { TwoDayPlan, buildTwoDayPlan, findLastMaxEffort } from '../domain/sprint/daily-plan';
 
 // ── Athlete profile ─────────────────────────────────────────────────────────
 
@@ -359,6 +360,30 @@ export const mockDailyTimeSeries: DailyDataPoint[] = buildDailyTimeSeries(
   DEMO_AGE,
   TODAY,
 );
+
+// ── Today / tomorrow recommendation ─────────────────────────────────────────
+
+/**
+ * The demo athlete has no Intervals.icu forecast — there is no real account
+ * behind it — so tomorrow falls back to the rest-day decay model, and the panel
+ * labels it "If you rest". That is the same path a live athlete takes when
+ * their calendar holds no planned workouts.
+ */
+export const mockDailyPlan: TwoDayPlan = buildTwoDayPlan({
+  now: TODAY,
+  nfi,
+  nfiStatus,
+  todayTsb: tsb,
+  projectedTomorrowTsb: null,
+  ctl: todayLoad.ctl,
+  atl: todayLoad.atl,
+  recoveryHours: smartRecovery.hours,
+  lastMaxEffortAt: findLastMaxEffort(
+    demoActivities,
+    windowBestVmax,
+    SilverSprintLogic.SPRINT_SESSION_VMAX_FRACTION,
+  ),
+});
 
 // ── Race estimates ──────────────────────────────────────────────────────────
 

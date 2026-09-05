@@ -18,6 +18,7 @@ import {
   mockRecoveredEstimates,
   mockSprintRacePlans,
   mockTrainingPlan,
+  mockDailyPlan,
 } from './data/mockDashboardData';
 
 const App: React.FC = () => {
@@ -93,7 +94,7 @@ const App: React.FC = () => {
   // 2b. Fetch data using our custom hook
   const {
     intervals, wellness, nfi, nfiStatus, avgVmax, todayVmax,
-    recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, raceCalibration, loading, error,
+    recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, raceCalibration, dailyPlan, loading, error,
   } = useIntervalsData(auth?.athleteId || '', auth?.accessToken || '', auth?.authType || 'basic', raceResults);
 
   const handleOAuthLogin = async () => {
@@ -214,6 +215,7 @@ const App: React.FC = () => {
         trainingPlan={mockTrainingPlan}
         raceResults={[]}
         raceCalibration={NEUTRAL_CALIBRATION}
+        dailyPlan={mockDailyPlan}
         onLogin={handleOAuthLogin}
         onLogout={() => {}}
         onPushWorkout={async () => false}
@@ -293,6 +295,7 @@ const App: React.FC = () => {
       trainingPlan={trainingPlan}
       raceResults={raceResults}
       raceCalibration={raceCalibration}
+      dailyPlan={dailyPlan}
       onAddRaceResult={addRaceResult}
       onRemoveRaceResult={removeRaceResult}
       onLogout={handleLogout}

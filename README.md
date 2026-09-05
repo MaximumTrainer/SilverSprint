@@ -128,6 +128,32 @@ survive reloads and browser restarts for exactly as long as your login does.
 Logging out is the only thing that clears them. They never leave the browser —
 entering a result costs no Intervals.icu request.
 
+### Next 48 Hours — Today and Tomorrow
+
+The dashboard prescribes today *and* tomorrow, so you can see what today's
+session costs you before you commit to it.
+
+| | Today | Tomorrow |
+|---|---|---|
+| TSB | Measured, from today's wellness row | Intervals.icu's forecast from workouts already on your calendar, else an explicit rest-day decay model |
+| Strength band | From that day's own TSB | From that day's projected TSB |
+| Sprint session | NFI-driven, as before | Driven by the **recovery window**, not a guessed NFI |
+| Label | `Measured` | `Forecast` / `If you rest`, and always provisional |
+
+Nothing about tomorrow's neural state is invented. NFI measures the velocity of
+a sprint that has happened; tomorrow's has not. Tomorrow's sprint guidance
+therefore comes from the age-adjusted recovery window — a quantity the app
+already computes — and is marked provisional.
+
+Only a genuine sprint session starts a recovery window. An easy run costs
+nothing neurally and does not reset the clock, using the same sprint-session
+rule as the NFI baseline.
+
+When the two signals disagree — NFI clears a max-effort session while the
+recovery window is still running — the prescription follows NFI, because the
+model is neural-first by design, and the card states the dissent rather than
+dropping it.
+
 ### Multi-Race Planner
 
 Fetches upcoming RACE_A / RACE_B / RACE_C events (<800 m) from Intervals.icu and generates phase-appropriate training plans:
@@ -249,6 +275,8 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │   ├── AuthGate.tsx       # Login screen with API validation
 │   │   ├── Dashboard.tsx      # Main dashboard UI
 │   │   ├── RaceResultsPanel.tsx    # Enter known race times
+│   │   ├── StrengthZoneScale.tsx   # Labelled TSB band scale
+│   │   ├── TwoDayPlanPanel.tsx     # Next 48 hours
 │   │   ├── SpringTrainingPanel.tsx  # 7-tab fascia training module
 │   │   └── TimeSeriesChart.tsx     # Reusable 60-day trend chart
 │   ├── domain/
@@ -262,6 +290,7 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │   │   ├── race-estimator.ts  # Multi-factor race time predictions
 │   │   │   ├── race-results.ts    # Known race times + model calibration
 │   │   │   ├── race-plan.ts       # Multi-race training planner
+│   │   │   ├── daily-plan.ts      # Today/tomorrow recommendation
 │   │   │   └── workouts.ts       # NFI-adaptive sprint workout generator
 │   │   └── recovery/
 │   │       ├── fascia-periodization.ts  # 4-week fascia mesocycle

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { buildDashboardState, DashboardState, HttpGet } from '../application/dashboard-sync';
 import { RaceEstimator } from '../domain/sprint/race-estimator';
 import { NEUTRAL_CALIBRATION, RaceResult } from '../domain/sprint/race-results';
+import { buildTwoDayPlan } from '../domain/sprint/daily-plan';
 import { buildAuthorizationHeader } from '../lib/auth-storage';
 import { clientLogger } from '../logger';
 
@@ -41,6 +42,19 @@ const INITIAL_STATE: IntervalsDataState = {
     trainingIntervals: [],
   },
   raceCalibration: NEUTRAL_CALIBRATION,
+  // A neutral placeholder so the dashboard can render before the first sync
+  // resolves; replaced wholesale by the real plan on load.
+  dailyPlan: buildTwoDayPlan({
+    now: new Date(),
+    nfi: 1.0,
+    nfiStatus: 'green',
+    todayTsb: 0,
+    projectedTomorrowTsb: null,
+    ctl: 0,
+    atl: 0,
+    recoveryHours: 48,
+    lastMaxEffortAt: null,
+  }),
   loading: true,
   error: null,
 };

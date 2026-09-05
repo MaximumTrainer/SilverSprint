@@ -19,12 +19,12 @@ export interface PeriodizationPrescription {
 }
 
 /**
- * §3.3 — Strength Training Periodization
+ * §3.3 — Strength Training Periodization.
  *
- * Converts TSB into specific gym prescriptions:
- *   TSB > 0 (Fresh): High Intensity, Low Volume — Max Strength focus
- *   TSB -10 to -20 (Tired): Moderate Intensity — Stiffened Plyometrics
- *   TSB < -20 (Fatigued): Rest or Active Mobility only
+ * Converts TSB into specific gym prescriptions. The bands themselves live in
+ * `STRENGTH_ZONE_BANDS`; this module only maps a zone to its exercises, so the
+ * thresholds are never restated here. (They previously were, as "-10 to -20"
+ * for Tired, which disagreed with the 0 to -20 the code actually used.)
  */
 export class StrengthPeriodization {
   private static readonly FRESH_EXERCISES: Exercise[] = [

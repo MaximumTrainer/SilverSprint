@@ -395,7 +395,11 @@ describe('buildDashboardState — request windows', () => {
     expect(activities).toContain('oldest=2026-07-07');
     expect(activities).toContain('newest=2026-09-05');
     expect(wellness).toContain('oldest=2026-07-08');
-    expect(wellness).toContain('newest=2026-09-05');
+    // The wellness window runs two days past today: Intervals.icu answers
+    // future dates with a CTL/ATL forecast, which is what the next-day
+    // recommendation reads. Those rows are partitioned off from the measured
+    // ones before anything describing today's state is derived.
+    expect(wellness).toContain('newest=2026-09-07');
   });
 
   it('requests race events before the per-activity request burst', async () => {
@@ -640,5 +644,72 @@ describe('buildDashboardState — projected wellness rows', () => {
     expect(state.dailyTimeSeries).toHaveLength(60);
     expect(state.dailyTimeSeries.at(-1)!.date).toBe(FIXTURE_TODAY);
     expect(state.dailyTimeSeries.at(-1)!.tsb).not.toBeCloseTo(PROJECTED_TOMORROW.tsb, 1);
+  });
+});
+
+describe('buildDashboardState — two-day training recommendation', () => {
+  it('recommends today from measurements and tomorrow from the forecast', async () => {
+    const api = createIntervalsApiStub({ wellness: withProjectedFutureRows(buildWellnessSeries()) });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    expect(state.dailyPlan.today.date).toBe(FIXTURE_TODAY);
+    expect(state.dailyPlan.today.tsbSource).toBe('recorded');
+    expect(state.dailyPlan.tomorrow.tsbSource).toBe('projected');
+    expect(state.dailyPlan.tomorrow.tsb).toBeCloseTo(PROJECTED_TOMORROW.tsb, 1);
+  });
+
+  it('falls back to the rest-day model when the account has no forecast', async () => {
+    const state = await sync();
+    expect(state.dailyPlan.tomorrow.tsbSource).toBe('modelled');
+    expect(state.dailyPlan.tomorrowBasis).toContain('not train');
+  });
+
+  it('keeps today\'s plan consistent with the headline figures', async () => {
+    const state = await sync();
+    expect(state.dailyPlan.today.tsb).toBeCloseTo(state.tsb, 2);
+    expect(state.dailyPlan.today.strengthBand.zone).toBe(state.strengthZone);
+    expect(state.dailyPlan.today.sprint.status).toBe(state.nfiStatus);
+    expect(state.dailyPlan.today.recovery.windowHours).toBe(state.recoveryHours);
+  });
+
+  it('starts the recovery clock from a sprint session, not an easy run', async () => {
+    const state = await sync();
+    // The fixture's most recent run is the sprint primer (8.31 m/s), today.
+    // The easy 3.29 m/s run eight days ago must not be what the clock reads.
+    expect(state.dailyPlan.today.recovery.hoursSinceMaxEffort).not.toBeNull();
+    expect(state.dailyPlan.today.recovery.hoursSinceMaxEffort!).toBeLessThan(48);
+  });
+
+  it('does not offer a max-effort session the day after a hard sprint', async () => {
+    const state = await sync();
+    // 102h+ recovery window for a 49-year-old, sprinted today: tomorrow is
+    // still well inside it whatever today's NFI says.
+    expect(state.dailyPlan.tomorrow.recovery.cleared).toBe(false);
+    expect(state.dailyPlan.tomorrow.sprint.status).not.toBe('green');
+  });
+
+  it('marks tomorrow provisional and today measured', async () => {
+    const state = await sync();
+    expect(state.dailyPlan.today.provisional).toBe(false);
+    expect(state.dailyPlan.tomorrow.provisional).toBe(true);
+  });
+
+  it('never lets a forecast row set today\'s plan', async () => {
+    const withForecast = createIntervalsApiStub({ wellness: withProjectedFutureRows(buildWellnessSeries()) });
+    const forecastState = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: withForecast.httpGet, now: FIXTURE_NOW });
+    const baseline = await sync();
+
+    expect(forecastState.dailyPlan.today.tsb).toBeCloseTo(baseline.dailyPlan.today.tsb, 5);
+    expect(forecastState.dailyPlan.today.strengthBand.zone).toBe(baseline.dailyPlan.today.strengthBand.zone);
+  });
+
+  it('still derives HRV from measured rows once forecasts are in the window', async () => {
+    // Forecast rows carry no HRV. Reading them as "latest" would blank the
+    // readiness card and skew the 7-day average.
+    const api = createIntervalsApiStub({ wellness: withProjectedFutureRows(buildWellnessSeries()) });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    expect(state.wellness?.id).toBe(FIXTURE_TODAY);
+    expect(state.wellness?.hrv).toBe(FIXTURE_TODAY_HRV);
   });
 });

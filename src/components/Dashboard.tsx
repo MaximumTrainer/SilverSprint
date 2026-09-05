@@ -9,6 +9,8 @@ import { RaceEstimate } from '../domain/sprint/race-estimator';
 import { RaceCalibration, RaceResult } from '../domain/sprint/race-results';
 import { RaceResultsPanel } from './RaceResultsPanel';
 import { StrengthZoneScale } from './StrengthZoneScale';
+import { TwoDayPlanPanel } from './TwoDayPlanPanel';
+import type { TwoDayPlan } from '../domain/sprint/daily-plan';
 import { SprintRacePlan, PriorRaceContext } from '../domain/sprint/race-plan';
 import type { TrainingPlanContext } from '../domain/sprint/training-plan';
 import { TimeSeriesChart } from './TimeSeriesChart';
@@ -49,6 +51,8 @@ interface DashboardProps {
   sprintRacePlans: SprintRacePlan[];
   /** 12-week training plan context, present when a race is within 84 days */
   trainingPlan: TrainingPlanContext | null;
+  /** Today's and tomorrow's recommendation. */
+  dailyPlan: TwoDayPlan;
   onLogout: () => void;
   /** When provided, the user is unauthenticated — show demo header instead of user info. */
   onLogin?: () => void;
@@ -217,6 +221,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   dailyTimeSeries,
   raceEstimates,
   recoveredEstimates,
+  dailyPlan,
   raceResults,
   raceCalibration,
   onAddRaceResult,
@@ -782,6 +787,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </div>
         </div>
+
+        <TwoDayPlanPanel plan={dailyPlan} />
 
         {/* ── Race Estimates Card ──────────────────────────── */}
         <div className="icu-card" style={{ marginTop: 12 }}>

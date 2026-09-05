@@ -4,6 +4,7 @@ import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../domain/sprin
 import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sprint/race-plan';
 import { SprintTrainingPlan, TrainingPlanContext } from '../domain/sprint/training-plan';
 import { RaceCalibration, RaceResult } from '../domain/sprint/race-results';
+import { TwoDayPlan, buildTwoDayPlan, findLastMaxEffort } from '../domain/sprint/daily-plan';
 import {
   IntervalsActivitySchema,
   IntervalsWellnessSchema,
@@ -91,6 +92,13 @@ export interface DashboardState {
   raceEstimatorInput: RaceEstimatorInput;
   /** The correction derived from the athlete's known race times. */
   raceCalibration: RaceCalibration;
+  /**
+   * Today's and tomorrow's training recommendation.
+   *
+   * Today is built from measurements; tomorrow from Intervals.icu's own CTL/ATL
+   * forecast, falling back to an explicit rest-day decay model.
+   */
+  dailyPlan: TwoDayPlan;
 }
 
 /** Number of days of historical activity/wellness data to fetch */
@@ -99,6 +107,8 @@ export const LOOKBACK_DAYS = 60;
 export const RACE_LOOKAHEAD_DAYS = 90;
 /** Default HRV value when no wellness data is available */
 export const DEFAULT_HRV = 60;
+/** Days of forward CTL/ATL projection to request for the next-day recommendation */
+export const WELLNESS_LOOKAHEAD_DAYS = 2;
 
 /**
  * Fetches every Intervals.icu resource the dashboard needs and derives the
@@ -119,6 +129,12 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
   const newest = formatDateDaysAgo(now, 0);
   // Wellness endpoint uses an inclusive date range: today − 59 days → today = 60 days
   const wellnessOldest = formatDateDaysAgo(now, LOOKBACK_DAYS - 1);
+  // Ask for a few days past today as well. Intervals.icu answers future dates
+  // with a CTL/ATL forecast derived from the workouts already on the calendar,
+  // which is what the next-day recommendation is built from. Rows dated after
+  // today are partitioned off below so they can never be mistaken for
+  // measurements.
+  const wellnessNewest = formatDateDaysAhead(now, WELLNESS_LOOKAHEAD_DAYS);
   logger.info('Fetching profile, activities, and wellness in parallel', athleteId);
 
   const futureDate = formatDateDaysAhead(now, RACE_LOOKAHEAD_DAYS);
@@ -141,7 +157,7 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
   const [profileRes, activitiesRes, wellnessRes] = await Promise.all([
     httpGet(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}`),
     httpGet(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/activities?oldest=${oldest}&newest=${newest}`),
-    httpGet(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/wellness?oldest=${wellnessOldest}&newest=${newest}`),
+    httpGet(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/wellness?oldest=${wellnessOldest}&newest=${wellnessNewest}`),
   ]);
 
   // 0. Process athlete profile for age & weight
@@ -183,11 +199,18 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
     .map((r) => r.data)
     .sort((a, b) => wellnessDate(b).localeCompare(wellnessDate(a)));
 
-  const latestWellness = wellnessEntries[0] || null;
+  // Split measurements from forecasts. Everything describing the athlete's
+  // *current* state must come from the measured side; only the next-day
+  // recommendation may read the forecast.
+  const isMeasured = (w: IntervalsWellness) => (w.date || w.id || '') <= todayDate;
+  const measuredWellness = wellnessEntries.filter(isMeasured);
+  const projectedWellness = wellnessEntries.filter((w) => !isMeasured(w));
+
+  const latestWellness = measuredWellness[0] || null;
 
   // Extract body weight: prefer profile, fall back to most recent wellness entry
   const bodyWeightKg = profileWeightKg
-    ?? wellnessEntries.find((w) => typeof w.weight === 'number' && w.weight > 0)?.weight
+    ?? measuredWellness.find((w) => typeof w.weight === 'number' && w.weight > 0)?.weight
     ?? null;
 
   // 3. Select latest session/activity for sprint metrics
@@ -215,7 +238,7 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
   // 5. Calculate HRV-based recovery (§3.2)
   // wellness endpoint returns hrv as the primary HRV field; fall back to rmssd for compatibility
   const currentHRV = extractHRV(latestWellness ?? {}) || DEFAULT_HRV;
-  const recentHRVs = wellnessEntries
+  const recentHRVs = measuredWellness
     .slice(0, 7)
     .map((w) => extractHRV(w))
     .filter((h): h is number => typeof h === 'number' && h > 0);
@@ -238,14 +261,14 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
   //
   // Accounts whose wellness rows carry no load data fall back to the activity
   // values, which is the previous behaviour and still better than zero.
-  const load = selectCurrentTrainingLoad(wellnessEntries, latestSession, todayDate);
+  const load = selectCurrentTrainingLoad(measuredWellness, latestSession, todayDate);
   const latestATL = load.atl;
   const latestCTL = load.ctl;
   const tsb = latestCTL - latestATL;
   const strengthRx = SilverSprintLogic.getStrengthPrescription(tsb);
 
   // 7. Build 60-day time series for charts
-  const dailyTimeSeries = buildDailyTimeSeries(activities, wellnessEntries, avgVmax, avgHRV7d, athleteAge, now);
+  const dailyTimeSeries = buildDailyTimeSeries(activities, measuredWellness, avgVmax, avgHRV7d, athleteAge, now);
 
   // 8. Race estimates based on best Vmax + training interval history
   const bestVmax60d = activities.reduce((best, a) => Math.max(best, a.max_speed ?? 0), 0);
@@ -364,6 +387,39 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
   const recoveryHours = smartRecovery.hours;
   const adjustedSRS = smartRecovery.srs;
   const staleVmax = smartRecovery.staleVmax;
+
+  // 8c. Today's and tomorrow's recommendation.
+  // Only a genuine sprint session starts a recovery window — an easy run costs
+  // nothing neurally, so it must not reset the clock.
+  const lastMaxEffortAt = findLastMaxEffort(
+    activities,
+    windowBestVmax,
+    SilverSprintLogic.SPRINT_SESSION_VMAX_FRACTION,
+  );
+
+  const tomorrowDate = formatDateDaysAhead(now, 1);
+  const tomorrowRow = projectedWellness.find((w) => (w.date || w.id) === tomorrowDate);
+  const projectedTomorrowTsb =
+    tomorrowRow && typeof tomorrowRow.ctl === 'number' && typeof tomorrowRow.atl === 'number'
+      ? tomorrowRow.ctl - tomorrowRow.atl
+      : null;
+
+  const dailyPlan = buildTwoDayPlan({
+    now,
+    nfi: currentNFI,
+    nfiStatus,
+    todayTsb: tsb,
+    projectedTomorrowTsb,
+    ctl: latestCTL,
+    atl: latestATL,
+    recoveryHours,
+    lastMaxEffortAt,
+  });
+
+  logger.info(
+    `Plan — today: ${dailyPlan.today.headline} | tomorrow (${dailyPlan.tomorrow.tsbSource}): ${dailyPlan.tomorrow.headline}`,
+    athleteId,
+  );
 
   const raceInput: RaceEstimatorInput = {
     bestVmax60d,
@@ -484,6 +540,7 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
     trainingPlan,
     raceEstimatorInput: raceInput,
     raceCalibration,
+    dailyPlan,
   };
 }
 
