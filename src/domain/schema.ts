@@ -18,11 +18,24 @@ export const IntervalsActivitySchema = z.object({
   id: z.string(),
   type: z.enum(RUN_ACTIVITY_TYPES),
   start_date_local: z.string().optional(),
-  velocity_smooth: z.array(z.number()).default([]),
-  max_speed: z.number(),
-  icu_training_load: z.number(),
-  icu_atl: z.number(), // Fatigue
-  icu_ctl: z.number(), // Fitness
+  /**
+   * Velocity samples, when the caller has merged a stream onto the activity.
+   * GPS dropouts appear as nulls, which are stripped so downstream maths
+   * (Math.max, running sums) never sees a non-number.
+   */
+  velocity_smooth: z
+    .array(z.number().nullable())
+    .default([])
+    .transform((samples) => samples.filter((v): v is number => typeof v === 'number' && Number.isFinite(v))),
+  /**
+   * Peak speed in m/s, or `null` when the activity carries no GPS trace
+   * (manual entries, treadmill sessions). `null` means "no velocity data" and
+   * must not be conflated with a genuine 0 m/s reading.
+   */
+  max_speed: z.number().nullable().default(null),
+  icu_training_load: z.number().nullable().default(0).transform((v) => v ?? 0),
+  icu_atl: z.number().nullable().default(0).transform((v) => v ?? 0), // Fatigue
+  icu_ctl: z.number().nullable().default(0).transform((v) => v ?? 0), // Fitness
 });
 
 export type IntervalsActivity = z.infer<typeof IntervalsActivitySchema>;
@@ -59,26 +72,33 @@ export type IntervalsEvent = z.infer<typeof IntervalsEventSchema>;
  * Schema for a single interval entry from the Intervals.icu
  * GET /api/v1/activity/{id}/intervals endpoint.
  */
+/**
+ * Every field is `nullish` rather than `optional`: Intervals.icu emits explicit
+ * `null`s for fields it has no value for. Auto-detected laps — which is what
+ * the API returns for any session not built from a structured workout — always
+ * carry `label: null`, so an `optional()` schema rejects the entire lap set and
+ * the app silently loses all rep-level analysis.
+ */
 export const IntervalsIntervalSchema = z.object({
-  label: z.string().optional(),
-  start_index: z.number().optional(),
-  end_index: z.number().optional(),
+  label: z.string().nullish(),
+  start_index: z.number().nullish(),
+  end_index: z.number().nullish(),
   /** Distance in metres */
-  distance: z.number().optional(),
+  distance: z.number().nullish(),
   /** Total elapsed time in seconds */
-  elapsed_time: z.number().optional(),
+  elapsed_time: z.number().nullish(),
   /** Active moving time in seconds */
-  moving_time: z.number().optional(),
+  moving_time: z.number().nullish(),
   /** Average speed in m/s */
-  average_speed: z.number().optional(),
+  average_speed: z.number().nullish(),
   /** Peak speed in m/s */
-  max_speed: z.number().optional(),
+  max_speed: z.number().nullish(),
   /** Interval type e.g. "WORK", "REST", "ACTIVE_REST", "WARMUP", "COOLDOWN" */
-  type: z.string().optional(),
+  type: z.string().nullish(),
   /** Training load contribution of this interval (from Intervals.icu, field name: training_load) */
-  training_load: z.number().optional(),
+  training_load: z.number().nullish(),
   /** Legacy alias — kept for backward compatibility with older API responses */
-  icu_training_load: z.number().optional(),
+  icu_training_load: z.number().nullish(),
 });
 
 export type IntervalsInterval = z.infer<typeof IntervalsIntervalSchema>;

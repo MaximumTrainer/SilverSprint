@@ -111,21 +111,24 @@ export default async function handler(req: ServerlessRequest, res: ServerlessRes
       ? apiIntervals
       : SprintParser.parseTrackSession(parsed.data);
 
-    const todayVmax = parsed.data.max_speed;
+    // max_speed is null on activities with no GPS trace; treat that as no velocity signal.
+    const todayVmax = parsed.data.max_speed ?? 0;
 
     // Fetch recent activities for 30-day baseline
     const recentRes = await fetch(
       `https://intervals.icu/api/v1/athlete/${athleteId}/activities?oldest=${getDateDaysAgo(30)}`,
       { headers }
     );
-    const recentActivities: Array<{ type?: string; id?: string; max_speed?: number }> = recentRes.ok ? await recentRes.json() : [];
-    const validVmaxes = recentActivities
-      .filter((a) => (RUN_ACTIVITY_TYPES as readonly string[]).includes(a.type ?? '') && a.id !== id && (a.max_speed ?? 0) > 0)
-      .map((a) => a.max_speed!);
+    const recentActivities: Array<{ type?: string; id?: string; max_speed?: number | null }> = recentRes.ok ? await recentRes.json() : [];
+    const priorVmaxes = recentActivities
+      .filter((a) => (RUN_ACTIVITY_TYPES as readonly string[]).includes(a.type ?? '') && a.id !== id)
+      .map((a) => a.max_speed);
 
-    const avgVmax = validVmaxes.length > 0
-      ? validVmaxes.reduce((a, b) => a + b, 0) / validVmaxes.length
-      : todayVmax;
+    const windowBestVmax = priorVmaxes.reduce<number>((best, v) => Math.max(best, v ?? 0), todayVmax);
+
+    // Same baseline rule as the dashboard: only sessions that actually reached
+    // sprint speed count, so easy runs cannot inflate the NFI.
+    const avgVmax = SilverSprintLogic.calculateVmaxBaseline(priorVmaxes, windowBestVmax) ?? todayVmax;
 
     const nfi = SilverSprintLogic.calculateNFI(todayVmax, avgVmax);
 

@@ -83,6 +83,7 @@ export const mockRaceEstimates: RaceEstimate[] = [
     confidence: 'moderate',
     note: 'Based on 30-day Vmax avg and acceleration profile.',
     phases: { reaction: 0.18, acceleration: 4.85, maxVelocity: 8.39, deceleration: 0 },
+    calibration: 'none',
   },
   {
     distance: 200,
@@ -91,6 +92,7 @@ export const mockRaceEstimates: RaceEstimate[] = [
     confidence: 'moderate',
     note: 'Speed endurance index applied to 200 m model.',
     phases: { reaction: 0.18, acceleration: 5.12, maxVelocity: 9.44, deceleration: 13.97 },
+    calibration: 'none',
   },
   {
     distance: 400,
@@ -99,6 +101,7 @@ export const mockRaceEstimates: RaceEstimate[] = [
     confidence: 'low',
     note: 'Extrapolated — limited 400 m training data.',
     phases: { reaction: 0.18, acceleration: 5.22, maxVelocity: 11.2, deceleration: 51.2 },
+    calibration: 'none',
   },
 ];
 
@@ -111,6 +114,7 @@ export const mockRecoveredEstimates: RaceEstimate[] = [
     confidence: 'moderate',
     note: 'Predicted at green NFI (fully recovered CNS).',
     phases: { reaction: 0.18, acceleration: 4.72, maxVelocity: 8.08, deceleration: 0 },
+    calibration: 'none',
   },
   {
     distance: 200,
@@ -119,6 +123,7 @@ export const mockRecoveredEstimates: RaceEstimate[] = [
     confidence: 'moderate',
     note: 'Predicted at green NFI.',
     phases: { reaction: 0.18, acceleration: 4.95, maxVelocity: 9.12, deceleration: 13.6 },
+    calibration: 'none',
   },
   {
     distance: 400,
@@ -127,6 +132,7 @@ export const mockRecoveredEstimates: RaceEstimate[] = [
     confidence: 'low',
     note: 'Predicted at green NFI.',
     phases: { reaction: 0.18, acceleration: 5.1, maxVelocity: 10.92, deceleration: 49.2 },
+    calibration: 'none',
   },
 ];
 

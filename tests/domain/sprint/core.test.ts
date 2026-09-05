@@ -316,3 +316,76 @@ describe('SilverSprintLogic.computeIntervalAdjustedTSB', () => {
     expect(SilverSprintLogic.computeIntervalAdjustedTSB(42, 55, 550, 10)).toBe(-13);
   });
 });
+
+/**
+ * §3.2 — Rolling Vmax baseline selection.
+ *
+ * The baseline must track the velocity the athlete reaches *when sprinting*.
+ * Averaging every logged run lets easy volume drag the baseline below true top
+ * speed, which pushes NFI permanently above 1.0 and disables the traffic light.
+ */
+describe('SilverSprintLogic.calculateVmaxBaseline', () => {
+  it('averages only sessions within 85% of the window best', () => {
+    // Best 9.0 → threshold 7.65. The 5.0 and 6.2 sessions are excluded.
+    const baseline = SilverSprintLogic.calculateVmaxBaseline([8.0, 5.0, 9.0, 6.2, 8.6], 9.0);
+    expect(baseline).toBeCloseTo((8.0 + 9.0 + 8.6) / 3, 5);
+  });
+
+  it('ignores easy runs that would otherwise deflate the baseline', () => {
+    const sprintOnly = [8.9, 8.7, 8.3];
+    const withEasyRuns = [8.9, 3.3, 8.7, 3.6, 4.9, 8.3];
+
+    expect(SilverSprintLogic.calculateVmaxBaseline(withEasyRuns, 8.9))
+      .toBeCloseTo(SilverSprintLogic.calculateVmaxBaseline(sprintOnly, 8.9)!, 5);
+  });
+
+  it('keeps NFI near 1.0 for a normal sprint session in a mixed training block', () => {
+    // A masters sprinter logging mostly easy volume: today matches recent
+    // sprint days, so the neural status should read green-but-not-inflated.
+    const todayVmax = 8.31;
+    const priorVmaxes = [8.01, 8.31, 7.88, 3.29, 6.40, 7.75, 8.92, 4.94, 3.59];
+    const windowBest = 8.92;
+
+    const baseline = SilverSprintLogic.calculateVmaxBaseline(priorVmaxes, windowBest)!;
+    const nfi = SilverSprintLogic.calculateNFI(todayVmax, baseline);
+
+    expect(nfi).toBeGreaterThan(0.93);
+    expect(nfi).toBeLessThan(1.06);
+  });
+
+  it('drops to amber when a sprint session comes in below the sprint baseline', () => {
+    const baseline = SilverSprintLogic.calculateVmaxBaseline([8.9, 8.7, 8.3, 8.5], 8.9)!;
+    const nfi = SilverSprintLogic.calculateNFI(8.25, baseline);
+    expect(SilverSprintLogic.getNFIStatus(nfi)).toBe('amber');
+  });
+
+  it('drops to red on a clear neural-fatigue day', () => {
+    const baseline = SilverSprintLogic.calculateVmaxBaseline([8.9, 8.7, 8.3, 8.5], 8.9)!;
+    const nfi = SilverSprintLogic.calculateNFI(7.9, baseline);
+    expect(SilverSprintLogic.getNFIStatus(nfi)).toBe('red');
+  });
+
+  it('skips sessions with no velocity data rather than treating them as slow', () => {
+    const withNulls = SilverSprintLogic.calculateVmaxBaseline([8.9, null, 8.7, undefined, 8.3], 8.9);
+    const withoutNulls = SilverSprintLogic.calculateVmaxBaseline([8.9, 8.7, 8.3], 8.9);
+    expect(withNulls).toBe(withoutNulls);
+  });
+
+  it('returns null when no earlier session reached sprint speed', () => {
+    // Today is a breakthrough session; everything before it was easy running.
+    expect(SilverSprintLogic.calculateVmaxBaseline([3.3, 4.1, 3.9], 8.9)).toBeNull();
+  });
+
+  it('returns null when there is no velocity data at all', () => {
+    expect(SilverSprintLogic.calculateVmaxBaseline([], 0)).toBeNull();
+    expect(SilverSprintLogic.calculateVmaxBaseline([null, null], 0)).toBeNull();
+  });
+
+  it('uses the documented 85% threshold', () => {
+    expect(SilverSprintLogic.SPRINT_SESSION_VMAX_FRACTION).toBe(0.85);
+
+    // Exactly on the threshold qualifies; a hair below does not.
+    expect(SilverSprintLogic.calculateVmaxBaseline([8.5], 10)).toBe(8.5);
+    expect(SilverSprintLogic.calculateVmaxBaseline([8.49], 10)).toBeNull();
+  });
+});

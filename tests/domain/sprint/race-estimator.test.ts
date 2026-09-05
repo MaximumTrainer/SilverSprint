@@ -283,3 +283,175 @@ describe('RaceEstimator — Phase breakdown', () => {
     }
   });
 });
+
+/**
+ * §3.4 — Calibration against races the athlete has actually run.
+ *
+ * The velocity model cannot know an athlete's start technique or race-day
+ * mechanics; a real result can. These tests cover how a result changes the
+ * prediction, and the guardrails that stop a bad entry wrecking it.
+ */
+describe('RaceEstimator — calibration to known race times', () => {
+  const NOW = new Date('2026-09-05T12:00:00Z');
+
+  const athlete: RaceEstimatorInput = {
+    bestVmax60d: 8.92,
+    avgVmax: 8.19,
+    nfi: 1.0,
+    nfiStatus: 'green',
+    tsb: 0,
+    age: 49,
+    activityCount: 20,
+  };
+
+  /** The model's own uncalibrated prediction, for comparison. */
+  const uncalibrated = RaceEstimator.estimate(athlete);
+  const timeFor = (estimates: RaceEstimate[], distance: 100 | 200 | 400) =>
+    estimates.find((e) => e.distance === distance)!.predictedTime;
+
+  it('leaves predictions untouched when no results are entered', () => {
+    const calibration = RaceEstimator.calibrate(athlete, [], NOW);
+    const estimates = RaceEstimator.estimate({ ...athlete, calibration });
+
+    expect(calibration.resultCount).toBe(0);
+    expect(estimates.map((e) => e.predictedTime)).toEqual(uncalibrated.map((e) => e.predictedTime));
+    expect(estimates.every((e) => e.calibration === 'none')).toBe(true);
+  });
+
+  it('slows the prediction toward a result the athlete actually ran', () => {
+    const slower = timeFor(uncalibrated, 100) + 1.0;
+    const calibration = RaceEstimator.calibrate(
+      athlete,
+      [{ id: 'a', distance: 100, timeSeconds: slower, date: '2026-08-15' }],
+      NOW,
+    );
+    const estimates = RaceEstimator.estimate({ ...athlete, calibration });
+
+    expect(timeFor(estimates, 100)).toBeGreaterThan(timeFor(uncalibrated, 100));
+    expect(timeFor(estimates, 100)).toBeCloseTo(slower, 0);
+  });
+
+  it('speeds the prediction up when the athlete beats the model', () => {
+    const faster = timeFor(uncalibrated, 200) - 1.0;
+    const calibration = RaceEstimator.calibrate(
+      athlete,
+      [{ id: 'a', distance: 200, timeSeconds: faster, date: '2026-08-15' }],
+      NOW,
+    );
+    const estimates = RaceEstimator.estimate({ ...athlete, calibration });
+
+    expect(timeFor(estimates, 200)).toBeLessThan(timeFor(uncalibrated, 200));
+  });
+
+  it('marks the entered distance as directly calibrated and the others as inferred', () => {
+    const calibration = RaceEstimator.calibrate(
+      athlete,
+      [{ id: 'a', distance: 200, timeSeconds: timeFor(uncalibrated, 200) + 1.5, date: '2026-08-15' }],
+      NOW,
+    );
+    const estimates = RaceEstimator.estimate({ ...athlete, calibration });
+
+    expect(estimates.find((e) => e.distance === 200)!.calibration).toBe('direct');
+    expect(estimates.find((e) => e.distance === 100)!.calibration).toBe('inferred');
+    expect(estimates.find((e) => e.distance === 400)!.calibration).toBe('inferred');
+  });
+
+  it('moves an uncalibrated distance less than the calibrated one', () => {
+    const calibration = RaceEstimator.calibrate(
+      athlete,
+      [{ id: 'a', distance: 200, timeSeconds: timeFor(uncalibrated, 200) + 2.0, date: '2026-08-15' }],
+      NOW,
+    );
+    const estimates = RaceEstimator.estimate({ ...athlete, calibration });
+
+    const shift200 = timeFor(estimates, 200) / timeFor(uncalibrated, 200);
+    const shift100 = timeFor(estimates, 100) / timeFor(uncalibrated, 100);
+
+    expect(shift200).toBeGreaterThan(1);
+    expect(shift100).toBeGreaterThan(1);
+    expect(shift100).toBeLessThan(shift200);
+  });
+
+  it('raises confidence to high for a distance with a real result', () => {
+    const sparse: RaceEstimatorInput = { ...athlete, activityCount: 4 };
+    expect(RaceEstimator.estimate(sparse)[0].confidence).toBe('moderate');
+
+    const calibration = RaceEstimator.calibrate(
+      sparse,
+      [{ id: 'a', distance: 100, timeSeconds: 14.5, date: '2026-08-15' }],
+      NOW,
+    );
+    const estimates = RaceEstimator.estimate({ ...sparse, calibration });
+
+    expect(estimates.find((e) => e.distance === 100)!.confidence).toBe('high');
+  });
+
+  it('does not claim confidence when there is no velocity data to project from', () => {
+    const empty: RaceEstimatorInput = { ...athlete, bestVmax60d: 0, avgVmax: 0, activityCount: 0 };
+    const calibration = RaceEstimator.calibrate(
+      empty,
+      [{ id: 'a', distance: 100, timeSeconds: 14.5, date: '2026-08-15' }],
+      NOW,
+    );
+    const estimates = RaceEstimator.estimate({ ...empty, calibration });
+
+    expect(estimates[0].confidence).toBe('low');
+    expect(estimates[0].display).toBe('--');
+  });
+
+  it('mentions the calibration in the estimate note', () => {
+    const calibration = RaceEstimator.calibrate(
+      athlete,
+      [{ id: 'a', distance: 100, timeSeconds: timeFor(uncalibrated, 100) + 1.0, date: '2026-08-15' }],
+      NOW,
+    );
+    const estimates = RaceEstimator.estimate({ ...athlete, calibration });
+
+    expect(estimates.find((e) => e.distance === 100)!.note).toContain('Calibrated to your 100m');
+  });
+
+  it('calibrates against neutral readiness, so today\'s fatigue is not baked in', () => {
+    // The same result must produce the same correction whether the athlete is
+    // fresh or fatigued today — otherwise a bad day becomes permanent.
+    const result = [{ id: 'a', distance: 100 as const, timeSeconds: 15.2, date: '2026-08-15' }];
+
+    const fresh = RaceEstimator.calibrate({ ...athlete, nfi: 1.02, tsb: 8 }, result, NOW);
+    const fatigued = RaceEstimator.calibrate({ ...athlete, nfi: 0.92, nfiStatus: 'red', tsb: -25 }, result, NOW);
+
+    expect(fresh.factors[100]).toBeCloseTo(fatigued.factors[100], 10);
+  });
+
+  it('still applies today\'s readiness on top of the calibration', () => {
+    const result = [{ id: 'a', distance: 100 as const, timeSeconds: 15.2, date: '2026-08-15' }];
+    const calibration = RaceEstimator.calibrate(athlete, result, NOW);
+
+    const fresh = RaceEstimator.estimate({ ...athlete, calibration, nfi: 1.02, tsb: 8 });
+    const fatigued = RaceEstimator.estimate({ ...athlete, calibration, nfi: 0.92, nfiStatus: 'red', tsb: -25 });
+
+    expect(timeFor(fatigued, 100)).toBeGreaterThan(timeFor(fresh, 100));
+  });
+
+  it('keeps the phase breakdown consistent with the calibrated time', () => {
+    const calibration = RaceEstimator.calibrate(
+      athlete,
+      [{ id: 'a', distance: 100, timeSeconds: timeFor(uncalibrated, 100) + 1.2, date: '2026-08-15' }],
+      NOW,
+    );
+    const est = RaceEstimator.estimate({ ...athlete, calibration }).find((e) => e.distance === 100)!;
+    const phaseTotal = est.phases.reaction + est.phases.acceleration + est.phases.maxVelocity + est.phases.deceleration;
+
+    expect(phaseTotal).toBeCloseTo(est.predictedTime, 1);
+  });
+
+  it('keeps distances ordered after calibration', () => {
+    const calibration = RaceEstimator.calibrate(
+      athlete,
+      [{ id: 'a', distance: 400, timeSeconds: 66, date: '2026-08-15' }],
+      NOW,
+    );
+    const estimates = RaceEstimator.estimate({ ...athlete, calibration });
+
+    expect(timeFor(estimates, 100)).toBeLessThan(timeFor(estimates, 200));
+    expect(timeFor(estimates, 200)).toBeLessThan(timeFor(estimates, 400));
+  });
+});

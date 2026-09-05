@@ -1,451 +1,92 @@
-import { useState, useEffect } from 'react';
-import { SprintParser, TrackInterval } from '../domain/sprint/parser';
-import { SilverSprintLogic, HRVData, NFIStatus } from '../domain/sprint/core';
-import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../domain/sprint/race-estimator';
-import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sprint/race-plan';
-import { SprintTrainingPlan, TrainingPlanContext } from '../domain/sprint/training-plan';
-import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsEventSchema, IntervalsAthleteSchema, IntervalsIntervalSchema, IntervalsActivity, IntervalsWellness, IntervalsEvent } from '../domain/schema';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { buildDashboardState, DashboardState, HttpGet } from '../application/dashboard-sync';
+import { RaceEstimator } from '../domain/sprint/race-estimator';
+import { NEUTRAL_CALIBRATION, RaceResult } from '../domain/sprint/race-results';
 import { buildAuthorizationHeader } from '../lib/auth-storage';
 import { clientLogger } from '../logger';
-import type { DailyDataPoint } from '../domain/types';
-import { INTERVALS_BASE } from '../config/api';
 
-export interface IntervalsDataState {
-  activities: IntervalsActivity[];
-  intervals: TrackInterval[];
-  wellness: IntervalsWellness | null;
-  nfi: number;
-  nfiStatus: NFIStatus;
-  avgVmax: number;
-  todayVmax: number;
-  recoveryHours: number;
-  tsb: number;
-  strengthZone: 'fresh' | 'tired' | 'fatigued';
-  /** Sprint Recovery Score 0–100 (composite of HRV ratio, TSB, NFI) */
-  srs: number;
-  /** true when NFI is depressed from detraining, not genuine fatigue */
-  staleVmax: boolean;
-  age: number;
-  bodyWeightKg: number | null;
-  dailyTimeSeries: DailyDataPoint[];
-  raceEstimates: RaceEstimate[];
-  /** Predicted times if athlete were fully recovered (green NFI). Only populated when nfiStatus is amber/red. */
-  recoveredEstimates: RaceEstimate[];
-  sprintRacePlans: SprintRacePlan[];
-  /** 12-week training plan context, present when a race event is within 84 days */
-  trainingPlan: TrainingPlanContext | null;
+export interface IntervalsDataState extends DashboardState {
   loading: boolean;
   error: string | null;
 }
 
-const DAYS_LABEL = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-/** Number of days of historical activity/wellness data to fetch */
-const LOOKBACK_DAYS = 60;
-/** Number of days ahead to look for upcoming race events */
-const RACE_LOOKAHEAD_DAYS = 90;
-/** Default HRV value when no wellness data is available */
-const DEFAULT_HRV = 60;
-
-export const useIntervalsData = (athleteId: string, accessToken: string, authType: 'basic' | 'bearer' = 'basic') => {
-  const [data, setData] = useState<IntervalsDataState>({
-    activities: [],
-    intervals: [],
-    wellness: null,
+const INITIAL_STATE: IntervalsDataState = {
+  activities: [],
+  intervals: [],
+  wellness: null,
+  nfi: 1.0,
+  nfiStatus: 'green',
+  avgVmax: 0,
+  todayVmax: 0,
+  recoveryHours: 48,
+  tsb: 0,
+  strengthZone: 'fresh',
+  srs: 50,
+  staleVmax: false,
+  age: 0,
+  bodyWeightKg: null,
+  dailyTimeSeries: [],
+  raceEstimates: [],
+  recoveredEstimates: [],
+  sprintRacePlans: [],
+  trainingPlan: null,
+  raceEstimatorInput: {
+    bestVmax60d: 0,
+    avgVmax: 0,
     nfi: 1.0,
     nfiStatus: 'green',
-    avgVmax: 0,
-    todayVmax: 0,
-    recoveryHours: 48,
     tsb: 0,
-    strengthZone: 'fresh',
-    srs: 50,
-    staleVmax: false,
     age: 0,
-    bodyWeightKg: null,
-    dailyTimeSeries: [],
-    raceEstimates: [],
-    recoveredEstimates: [],
-    sprintRacePlans: [],
-    trainingPlan: null,
-    loading: true,
-    error: null,
-  });
+    activityCount: 0,
+    trainingIntervals: [],
+  },
+  raceCalibration: NEUTRAL_CALIBRATION,
+  loading: true,
+  error: null,
+};
+
+/**
+ * React adapter over the `buildDashboardState` use case.
+ *
+ * All derivation logic lives in the application layer; this hook owns only the
+ * HTTP adapter (authenticated `fetch`) and React state transitions.
+ *
+ * Known race times are handled specially. They are held locally, not fetched
+ * from Intervals.icu, so editing them must not trigger a full re-sync: the
+ * fetch effect reads them through a ref, and the race estimates are recomputed
+ * from the already-fetched inputs whenever the results change.
+ */
+export const useIntervalsData = (
+  athleteId: string,
+  accessToken: string,
+  authType: 'basic' | 'bearer' = 'basic',
+  raceResults: RaceResult[] = [],
+) => {
+  const [data, setData] = useState<IntervalsDataState>(INITIAL_STATE);
+
+  // Seed the first sync with whatever results are already known, without
+  // making the results a dependency of the fetch effect.
+  const raceResultsRef = useRef(raceResults);
+  raceResultsRef.current = raceResults;
 
   useEffect(() => {
-    const fetchAllData = async () => {
+    let cancelled = false;
+
+    const sync = async () => {
+      const headers = { Authorization: buildAuthorizationHeader({ athleteId, accessToken, authType }) };
+      const httpGet: HttpGet = (url) => fetch(url, { headers });
+
       try {
-        clientLogger.info('Starting data sync', athleteId);
-        const headers = { Authorization: buildAuthorizationHeader({ athleteId, accessToken, authType }) };
-
-        // Capture "today" once to ensure a consistent request window, even across midnight/DST.
-        const today = new Date();
-        const formatDateDaysAgo = (base: Date, daysAgo: number): string => {
-          const d = new Date(base);
-          d.setDate(d.getDate() - daysAgo);
-          return d.toISOString().slice(0, 10);
-        };
-
-        // Fetch profile, activities, and wellness in parallel (they are independent)
-        const oldest = formatDateDaysAgo(today, LOOKBACK_DAYS);
-        const newest = formatDateDaysAgo(today, 0);
-        // Wellness endpoint uses an inclusive date range: today − 59 days → today = 60 days
-        const wellnessOldest = formatDateDaysAgo(today, LOOKBACK_DAYS - 1);
-        clientLogger.info('Fetching profile, activities, and wellness in parallel', athleteId);
-
-        const [profileRes, activitiesRes, wellnessRes] = await Promise.all([
-          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}`, { headers }),
-          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/activities?oldest=${oldest}&newest=${newest}`, { headers }),
-          fetch(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/wellness?oldest=${wellnessOldest}&newest=${newest}`, { headers }),
-        ]);
-
-        // 0. Process athlete profile for age & weight
-        const rawProfile = profileRes.ok ? await profileRes.json() : {};
-        const parseResult = IntervalsAthleteSchema.safeParse(rawProfile);
-        const profile = parseResult.success ? parseResult.data : null;
-
-        /** Derive age from date-of-birth field */
-        function ageFromDob(dob?: string | null): number {
-          if (!dob) return 0;
-          const birth = new Date(dob);
-          const today = new Date();
-          let age = today.getFullYear() - birth.getFullYear();
-          const m = today.getMonth() - birth.getMonth();
-          if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
-          return age;
-        }
-
-        const athleteAge = ageFromDob(profile?.icu_date_of_birth) || 0;
-        const profileWeightKg =
-          (typeof profile?.weight === 'number' && profile.weight > 0 ? profile.weight : null)
-          ?? (typeof profile?.icu_weight === 'number' && profile.icu_weight > 0 ? profile.icu_weight : null);
-        clientLogger.info(`Athlete profile — age=${athleteAge}, weight=${profileWeightKg}`, athleteId);
-
-        // 1. Process activities
-        if (!activitiesRes.ok) {
-          const errorText = await activitiesRes.text();
-          clientLogger.error(`Activities fetch failed — HTTP ${activitiesRes.status}: ${errorText}`, athleteId);
-          throw new Error(`Activities fetch failed (HTTP ${activitiesRes.status})`);
-        }
-        const rawActivities = await activitiesRes.json();
-
-        // Validate each activity with Zod, keep only valid Runs
-        const activities: IntervalsActivity[] = rawActivities
-          .map((a: unknown) => IntervalsActivitySchema.safeParse(a))
-          .filter((r: { success: boolean }) => r.success)
-          .map((r: { success: true; data: IntervalsActivity }) => r.data);
-
-        // 2. Process Wellness (HRV/Readiness) from wellness endpoint
-        if (!wellnessRes.ok) {
-          clientLogger.warn(`Wellness fetch failed — HTTP ${wellnessRes.status}`, athleteId);
-        }
-        const rawWellness = wellnessRes.ok ? await wellnessRes.json() : [];
-        const wellnessEntries: IntervalsWellness[] = Array.isArray(rawWellness)
-          ? rawWellness
-              .map((w: unknown) => IntervalsWellnessSchema.safeParse(w))
-              .filter((r): r is { success: true; data: IntervalsWellness } => r.success)
-              .map((r) => r.data)
-          : [];
-
-        const latestWellness = wellnessEntries[0] || null;
-
-        // Extract body weight: prefer profile, fall back to most recent wellness entry
-        const bodyWeightKg = profileWeightKg
-          ?? wellnessEntries.find((w) => typeof w.weight === 'number' && w.weight > 0)?.weight
-          ?? null;
-
-        // 3. Select latest session/activity for sprint metrics
-        const latestSession = activities[0];
-
-        // 4. Calculate Neural Fatigue Index (NFI)
-        const todayVmax = latestSession?.max_speed || 0;
-        const validVmaxes = activities
-          .slice(1, 31)
-          .map((a) => a.max_speed)
-          .filter((v) => v > 0);
-
-        const avgVmax = validVmaxes.length > 0
-          ? validVmaxes.reduce((a, b) => a + b, 0) / validVmaxes.length
-          : todayVmax;
-
-        const currentNFI = SilverSprintLogic.calculateNFI(todayVmax, avgVmax);
-        const nfiStatus = SilverSprintLogic.getNFIStatus(currentNFI);
-
-        // 5. Calculate HRV-based recovery (§3.2)
-        // wellness endpoint returns hrv as the primary HRV field; fall back to rmssd for compatibility
-        const extractHRV = (w: { rmssd?: number | null; hrv?: number | null }): number | undefined =>
-          w.hrv ?? w.rmssd ?? undefined;
-        const currentHRV = extractHRV(latestWellness ?? {}) || DEFAULT_HRV;
-        const recentHRVs = wellnessEntries
-          .slice(0, 7)
-          .map((w) => extractHRV(w))
-          .filter((h): h is number => typeof h === 'number' && h > 0);
-        const avgHRV7d = recentHRVs.length > 0
-          ? recentHRVs.reduce((a, b) => a + b, 0) / recentHRVs.length
-          : currentHRV;
-
-        const hrvData: HRVData = { currentHRV, avgHRV7d };
-
-        // 6. Calculate TSB and Strength Zone (§3.3).
-        // This raw activity-level TSB is used for the strength prescription,
-        // race estimation, and UI display.  Recovery uses recoveryTSB (below),
-        // which is further adjusted with interval-level training load data.
-        const latestATL = latestSession?.icu_atl || 0;
-        const latestCTL = latestSession?.icu_ctl || 0;
-        const tsb = latestCTL - latestATL;
-        const strengthRx = SilverSprintLogic.getStrengthPrescription(tsb);
-
-        // 7. Build 60-day time series for charts
-        const dailyTimeSeries = buildDailyTimeSeries(activities, wellnessEntries, avgVmax, avgHRV7d, athleteAge);
-
-        // 8. Race estimates based on best Vmax + training interval history
-        const bestVmax60d = activities.reduce((best, a) => Math.max(best, a.max_speed), 0);
-
-        // Fetch structured interval data from the Intervals.icu API for each activity
-        // in the 60-day window. Only sprint-range efforts (≤ 400m) are included by the parser.
-        // The /intervals endpoint provides accurate rep-level data (distance, max_speed,
-        // moving_time) that is not present in the activity list response.
-        const activitiesForIntervals = activities;
-        const intervalFetches = await Promise.allSettled(
-          activitiesForIntervals.map(async (a) => {
-            const res = await fetch(
-              `${INTERVALS_BASE}/api/v1/activity/${a.id}/intervals`,
-              { headers }
-            );
-            if (!res.ok) return { intervals: [] as TrackInterval[], totalLoad: 0 };
-            const raw = await res.json();
-            // The /intervals endpoint returns { icu_intervals: [...], icu_groups: [...] },
-            // NOT a bare array. Fall back to the root itself in case the API shape changes.
-            const rawIntervals: unknown[] = Array.isArray(raw?.icu_intervals)
-              ? raw.icu_intervals
-              : Array.isArray(raw) ? raw : [];
-            if (rawIntervals.length === 0) return { intervals: [] as TrackInterval[], totalLoad: 0 };
-
-            let totalLoad = 0;
-            const intervals: TrackInterval[] = [];
-            for (const item of rawIntervals) {
-              const parsed = IntervalsIntervalSchema.safeParse(item);
-              if (!parsed.success) continue;
-              // Sum training_load from ALL interval types so that non-sprint load feeds into recovery.
-              totalLoad += parsed.data.training_load ?? 0;
-              const interval = SprintParser.fromAPIInterval(parsed.data);
-              if (interval) intervals.push(interval);
-            }
-
-            return { intervals, totalLoad };
-          })
-        );
-
-        // Merge: for each activity use API intervals when available, else fall back
-        // to fetching the activity's /streams endpoint (for its velocity_smooth) and
-        // parsing it.  The activity list endpoint omits velocity_smooth, so the
-        // parseTrackSession fallback only works when the stream is fetched separately.
-        // To avoid an unbounded burst of fallback requests (rate-limit risk), we
-        // process activities that need a fallback sequentially.
-        const allTrainingIntervals: TrackInterval[] = [];
-        for (let idx = 0; idx < activitiesForIntervals.length; idx++) {
-          const a = activitiesForIntervals[idx];
-          const result = intervalFetches[idx];
-          if (result.status === 'fulfilled' && result.value.intervals.length > 0) {
-            allTrainingIntervals.push(...result.value.intervals);
-            continue;
-          }
-
-          // Attempt to parse from the activity's velocity_smooth (may be populated
-          // by the list endpoint on some accounts).
-          const streamIntervals = SprintParser.parseTrackSession(a);
-          if (streamIntervals.length > 0) {
-            allTrainingIntervals.push(...streamIntervals);
-            continue;
-          }
-
-          // Last resort: fetch the activity's /streams endpoint to get velocity_smooth.
-          // This is an extra API call per activity that lacked both interval and
-          // list-level stream data.  Sequential processing avoids rate-limit bursts.
-          try {
-            const streamsRes = await fetch(
-              `${INTERVALS_BASE}/api/v1/activity/${a.id}/streams`,
-              { headers }
-            );
-            if (!streamsRes.ok) {
-              clientLogger.warn(
-                `Failed to fetch velocity stream for activity ${a.id}: ${streamsRes.status} ${streamsRes.statusText}`,
-                athleteId
-              );
-              continue;
-            }
-            const streams = await streamsRes.json();
-            const rawVelocitySmooth = Array.isArray(streams?.velocity_smooth?.data)
-              ? streams.velocity_smooth.data
-              : Array.isArray(streams?.velocity_smooth) ? streams.velocity_smooth : [];
-            const velocitySmooth = rawVelocitySmooth.filter(
-              (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
-            );
-            if (velocitySmooth.length === 0) {
-              if (rawVelocitySmooth.length > 0) {
-                clientLogger.warn(
-                  `Skipping velocity stream for activity ${a.id}: stream contained no valid numeric samples`,
-                  athleteId
-                );
-              }
-              continue;
-            }
-            allTrainingIntervals.push(
-              ...SprintParser.parseTrackSession({ velocity_smooth: velocitySmooth })
-            );
-          } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error);
-            clientLogger.warn(
-              `Failed to fetch or parse velocity stream for activity ${a.id}: ${reason}`,
-              athleteId
-            );
-          }
-        }
-
-        // Aggregate total training load from ALL interval types across recent sessions.
-        // This captures non-sprint load (warmup, cooldown, rest) that would otherwise
-        // be ignored by the WORK/ACTIVE-only filter used for race estimation.
-        const totalIntervalLoad = intervalFetches
-          .filter((r): r is PromiseFulfilledResult<{ intervals: TrackInterval[]; totalLoad: number }> => r.status === 'fulfilled')
-          .reduce((sum, r) => sum + r.value.totalLoad, 0);
-
-        clientLogger.info(`Parsed ${allTrainingIntervals.length} training intervals from ${activitiesForIntervals.length} activities (of ${activities.length} total), totalIntervalLoad=${totalIntervalLoad}`, athleteId);
-
-        // Compute a TSB that also reflects non-sprint interval training load.
-        const recoveryTSB = SilverSprintLogic.computeIntervalAdjustedTSB(
-          latestCTL,
-          latestATL,
-          totalIntervalLoad,
-          activitiesForIntervals.length,
-        );
-
-        const smartRecovery = SilverSprintLogic.getSmartRecoveryWindow(athleteAge, hrvData, recoveryTSB, currentNFI);
-        const recoveryHours = smartRecovery.hours;
-        const adjustedSRS = smartRecovery.srs;
-        const staleVmax = smartRecovery.staleVmax;
-
-        const raceInput: RaceEstimatorInput = {
-          bestVmax60d,
-          avgVmax,
-          nfi: currentNFI,
-          nfiStatus,
-          tsb,
-          age: athleteAge,
-          activityCount: activities.length,
-          trainingIntervals: allTrainingIntervals,
-        };
-        const raceEstimates = RaceEstimator.estimate(raceInput);
-
-        // 8b. "Fully recovered" estimates — only computed when fatigued
-        const recoveredEstimates: RaceEstimate[] = nfiStatus !== 'green'
-          ? RaceEstimator.estimate({
-              ...raceInput,
-              nfi: 1.0,
-              nfiStatus: 'green',
-              tsb: 5,
-            })
-          : [];
-
-        // 9. Fetch upcoming race events (next 90 days) and build sprint race plans
-        const futureDate = getDateDaysAhead(RACE_LOOKAHEAD_DAYS);
-        const todayDate = getDateDaysAgo(0);
-        let sprintRacePlans: SprintRacePlan[] = [];
-        let trainingPlan: TrainingPlanContext | null = null;
-        try {
-          clientLogger.info('Fetching upcoming race events', athleteId);
-          // Race categories are RACE_A, RACE_B, RACE_C in Intervals.icu
-          // The list endpoint requires a format suffix (.json) in the path
-          const eventsRes = await fetch(
-            `${INTERVALS_BASE}/api/v1/athlete/${athleteId}/events.json?oldest=${todayDate}&newest=${futureDate}&category=RACE_A&category=RACE_B&category=RACE_C`,
-            { headers }
-          );
-          if (eventsRes.ok) {
-            const rawEvents = await eventsRes.json();
-            clientLogger.info(`Events API returned ${Array.isArray(rawEvents) ? rawEvents.length : 0} event(s)`, athleteId);
-            const events: IntervalsEvent[] = (Array.isArray(rawEvents) ? rawEvents : [])
-              .map((e: unknown) => IntervalsEventSchema.safeParse(e))
-              .filter((r): r is { success: true; data: IntervalsEvent } => r.success)
-              .map((r) => r.data)
-              .filter((e) => {
-                // Filter to sprint races: type Run, distance < 800m
-                const distM = e.distance ?? e.distance_target ?? 0;
-                const pass = e.type === 'Run' && distM > 0 && distM < 800;
-                if (!pass) {
-                  clientLogger.info(`Skipping event "${e.name}" — type=${e.type}, dist=${distM}, cat=${e.category}`, athleteId);
-                }
-                return pass;
-              });
-
-            const today = new Date(todayDate);
-            const raceEvents: SprintRaceEvent[] = events
-              .map((e) => {
-                const raceDate = new Date(e.start_date_local.split('T')[0]);
-                const daysUntil = Math.max(
-                  0,
-                  Math.round((raceDate.getTime() - today.getTime()) / 86_400_000)
-                );
-                const distM = e.distance ?? e.distance_target ?? 0;
-                return {
-                  id: e.id,
-                  name: e.name || `${distM}m Race`,
-                  date: e.start_date_local.split('T')[0],
-                  distanceM: distM,
-                  daysUntil,
-                };
-              })
-              .sort((a, b) => a.daysUntil - b.daysUntil);
-
-            sprintRacePlans = SprintRacePlanner.buildMultiRacePlans(raceEvents, bestVmax60d, 45);
-
-            // Build 12-week training plan context from nearest event within the plan window
-            if (raceEvents.length > 0) {
-              const nearest = raceEvents[0];
-              trainingPlan = SprintTrainingPlan.buildContext(
-                nearest.daysUntil,
-                nearest.name,
-                nearest.distanceM,
-                nfiStatus,
-                currentNFI,
-                tsb,
-              );
-              if (trainingPlan) {
-                clientLogger.info(`Training plan: Week ${trainingPlan.planWeek}/12 — ${trainingPlan.phaseName} — ${trainingPlan.todaySpec.label}`, athleteId);
-              }
-            }
-
-            clientLogger.info(`Found ${sprintRacePlans.length} upcoming sprint race(s)`, athleteId);
-          } else {
-            clientLogger.warn(`Events fetch failed — HTTP ${eventsRes.status}`, athleteId);
-          }
-        } catch (eventsErr) {
-          clientLogger.warn('Could not fetch race events', athleteId, eventsErr);
-        }
-
-        setData({
-          activities,
-          intervals: allTrainingIntervals,
-          wellness: latestWellness,
-          nfi: currentNFI,
-          nfiStatus,
-          avgVmax,
-          todayVmax,
-          recoveryHours,
-          tsb,
-          strengthZone: strengthRx.zone,
-          srs: adjustedSRS,
-          staleVmax,
-          age: athleteAge,
-          bodyWeightKg,
-          dailyTimeSeries,
-          raceEstimates,
-          recoveredEstimates,
-          sprintRacePlans,
-          trainingPlan,
-          loading: false,
-          error: null,
+        const state = await buildDashboardState({
+          athleteId,
+          httpGet,
+          logger: clientLogger,
+          raceResults: raceResultsRef.current,
         });
-        clientLogger.info(`Data sync complete — NFI=${currentNFI.toFixed(3)}, activities=${activities.length}`, athleteId);
+        if (cancelled) return;
+        setData({ ...state, loading: false, error: null });
       } catch (err) {
+        if (cancelled) return;
         const message = err instanceof Error ? err.message : 'Failed to sync with Intervals.icu';
         clientLogger.error(`Data sync failed: ${message}`, athleteId, err);
         setData(prev => ({ ...prev, loading: false, error: message }));
@@ -453,90 +94,35 @@ export const useIntervalsData = (athleteId: string, accessToken: string, authTyp
     };
 
     if (athleteId && accessToken) {
-      fetchAllData();
+      sync();
     }
+
+    return () => { cancelled = true; };
   }, [athleteId, accessToken, authType]);
 
-  return data;
-};
-
-/**
- * Build a 60-day array of daily data points for the time-series charts.
- * Recovery hours are computed per-day using a rolling 7d HRV baseline
- * and the Sprint Recovery Score (SRS) composite model.
- */
-function buildDailyTimeSeries(
-  activities: IntervalsActivity[],
-  wellnessEntries: Array<{ id: string; date?: string; hrv?: number | null; rmssd?: number | null }>,
-  avgVmax: number,
-  avgHRV7d: number,
-  age: number,
-): DailyDataPoint[] {
-  // Index activities by date
-  const actByDate = new Map<string, IntervalsActivity>();
-  for (const act of activities) {
-    const dateStr = act.start_date_local?.split('T')[0];
-    if (dateStr && !actByDate.has(dateStr)) actByDate.set(dateStr, act);
-  }
-
-  // Build HRV map and a date-sorted array for per-day rolling window.
-  // Prefer hrv (wellness endpoint field) over rmssd for maximum accuracy.
-  const wellByDate = new Map<string, number>();
-  const hrvTimeline: Array<{ date: string; hrv: number }> = [];
-  for (const w of wellnessEntries) {
-    const dateStr = w.date || w.id;
-    const hrvValue = w.hrv ?? w.rmssd;
-    if (dateStr && hrvValue && hrvValue > 0 && !wellByDate.has(dateStr)) {
-      wellByDate.set(dateStr, hrvValue);
-      hrvTimeline.push({ date: dateStr, hrv: hrvValue });
+  // Recompute race estimates locally when the athlete edits their known times.
+  // This is pure domain maths over data already in memory — no network call.
+  const calibrated = useMemo(() => {
+    const input = data.raceEstimatorInput;
+    if (data.loading || input.age === 0 && input.activityCount === 0) {
+      return {
+        raceCalibration: data.raceCalibration,
+        raceEstimates: data.raceEstimates,
+        recoveredEstimates: data.recoveredEstimates,
+      };
     }
-  }
-  hrvTimeline.sort((a, b) => a.date.localeCompare(b.date));
 
-  const series: DailyDataPoint[] = [];
-  let lastTsb: number | null = null;
-  for (let i = 59; i >= 0; i--) {
-    const dateStr = getDateDaysAgo(i);
-    const d = new Date(dateStr + 'T12:00:00');
-    const dayLabel = `${d.getDate()} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]}`;
+    const raceCalibration = RaceEstimator.calibrate(input, raceResults);
+    const calibratedInput = { ...input, calibration: raceCalibration };
 
-    const act = actByDate.get(dateStr);
-    const hrv = wellByDate.get(dateStr);
+    return {
+      raceCalibration,
+      raceEstimates: RaceEstimator.estimate(calibratedInput),
+      recoveredEstimates: input.nfiStatus !== 'green'
+        ? RaceEstimator.estimate({ ...calibratedInput, nfi: 1.0, nfiStatus: 'green' as const, tsb: 5 })
+        : [],
+    };
+  }, [data, raceResults]);
 
-    const nfi = act && avgVmax > 0 ? act.max_speed / avgVmax : null;
-    const tsb: number | null = act ? (act.icu_ctl - act.icu_atl) : lastTsb;
-    if (tsb != null) lastTsb = tsb;
-
-    // Per-day rolling 7d HRV avg using only entries up to and including this day
-    const weekStartStr = getDateDaysAgo(i + 7);
-    const weekHRVs = hrvTimeline
-      .filter(e => e.date > weekStartStr && e.date <= dateStr)
-      .map(e => e.hrv);
-    const rollingAvg7d = weekHRVs.length > 0
-      ? weekHRVs.reduce((a, b) => a + b, 0) / weekHRVs.length
-      : avgHRV7d;
-
-    // SRS: neutral fallbacks for days without activity or HRV data
-    const dayHrvData: HRVData = { currentHRV: hrv ?? rollingAvg7d, avgHRV7d: rollingAvg7d };
-    const dayNfi = nfi ?? 1.0;
-    const dayTsb = tsb ?? 0;
-    const smartRec = SilverSprintLogic.getSmartRecoveryWindow(age, dayHrvData, dayTsb, dayNfi);
-    const recoveryHours = smartRec.hours;
-
-    series.push({ date: dateStr, dayLabel, nfi, tsb, recoveryHours, hrv: hrv ?? null });
-  }
-
-  return series;
-}
-
-function getDateDaysAgo(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().split('T')[0];
-}
-
-function getDateDaysAhead(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
+  return { ...data, ...calibrated };
+};

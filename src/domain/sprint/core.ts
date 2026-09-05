@@ -9,13 +9,56 @@ const RECOVERY_AGE_HOURS_PER_YEAR = 6;
 /** Maximum additional recovery hours imposed by a zero SRS */
 const RECOVERY_SRS_MAX_PENALTY_HOURS = 48;
 
+/**
+ * Fraction of the window's best Vmax a session must reach before it counts as
+ * a sprint session for baseline purposes.
+ */
+const SPRINT_SESSION_VMAX_FRACTION = 0.85;
+
 export class SilverSprintLogic {
+  /** @see SPRINT_SESSION_VMAX_FRACTION */
+  static readonly SPRINT_SESSION_VMAX_FRACTION = SPRINT_SESSION_VMAX_FRACTION;
+
   /**
    * §3.2 — Neural Fatigue Index
    * NFI = currentVmax / avgVmax (30-day rolling baseline)
    */
   static calculateNFI(currentVmax: number, avgVmax: number): number {
     return avgVmax > 0 ? parseFloat((currentVmax / avgVmax).toFixed(3)) : 1.0;
+  }
+
+  /**
+   * §3.2 — Rolling Vmax baseline for the Neural Fatigue Index.
+   *
+   * The baseline must represent the velocity the athlete *reaches when
+   * sprinting*, not the mean peak speed of everything they logged. A masters
+   * sprinter's easy runs, warm-up jogs and trail runs peak 3–5 m/s below their
+   * sprint Vmax, so averaging every run pulls the baseline far under true top
+   * speed and leaves NFI permanently above 1.0 — which silently disables the
+   * traffic light the whole recovery model depends on.
+   *
+   * Only sessions that reached at least {@link SPRINT_SESSION_VMAX_FRACTION}
+   * of the window's best Vmax are counted, which keeps the baseline anchored to
+   * genuine sprint days regardless of how much easy volume surrounds them.
+   *
+   * @param priorVmaxes    Vmax of each earlier session in the window; null/0 entries
+   *                       (no GPS trace) are ignored rather than counted as slow.
+   * @param windowBestVmax Best Vmax across the window, including today's session.
+   * @returns The baseline Vmax, or null when no earlier session reached sprint speed.
+   */
+  static calculateVmaxBaseline(
+    priorVmaxes: Array<number | null | undefined>,
+    windowBestVmax: number,
+  ): number | null {
+    if (!(windowBestVmax > 0)) return null;
+
+    const threshold = windowBestVmax * SPRINT_SESSION_VMAX_FRACTION;
+    const sprintVmaxes = priorVmaxes.filter(
+      (v): v is number => typeof v === 'number' && v > 0 && v >= threshold,
+    );
+
+    if (sprintVmaxes.length === 0) return null;
+    return sprintVmaxes.reduce((a, b) => a + b, 0) / sprintVmaxes.length;
   }
 
   /**

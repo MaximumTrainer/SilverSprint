@@ -51,28 +51,65 @@ describe('IntervalsActivitySchema (§2.2)', () => {
     }
   });
 
-  it('requires max_speed', () => {
+  it('strips null velocity samples left by GPS dropouts', () => {
+    const result = IntervalsActivitySchema.safeParse({
+      ...validActivity,
+      velocity_smooth: [0, 4.2, null, 8.1, null],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.velocity_smooth).toEqual([0, 4.2, 8.1]);
+    }
+  });
+
+  it('accepts a null max_speed from a manually-entered activity', () => {
+    // Intervals.icu returns max_speed: null for sessions with no GPS trace.
+    // Rejecting them would erase those activities from the athlete's history.
+    const result = IntervalsActivitySchema.safeParse({ ...validActivity, max_speed: null });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.max_speed).toBeNull();
+    }
+  });
+
+  it('represents an absent max_speed as null rather than zero', () => {
     const { max_speed, ...rest } = validActivity;
     const result = IntervalsActivitySchema.safeParse(rest);
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // null means "no velocity data"; 0 would mean "stationary".
+      expect(result.data.max_speed).toBeNull();
+    }
   });
 
-  it('requires icu_training_load', () => {
-    const { icu_training_load, ...rest } = validActivity;
+  it('defaults absent training-load fields to zero', () => {
+    const { icu_training_load, icu_atl, icu_ctl, ...rest } = validActivity;
     const result = IntervalsActivitySchema.safeParse(rest);
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.icu_training_load).toBe(0);
+      expect(result.data.icu_atl).toBe(0);
+      expect(result.data.icu_ctl).toBe(0);
+    }
   });
 
-  it('requires icu_atl (Fatigue)', () => {
-    const { icu_atl, ...rest } = validActivity;
-    const result = IntervalsActivitySchema.safeParse(rest);
-    expect(result.success).toBe(false);
+  it('coerces null training-load fields to zero', () => {
+    const result = IntervalsActivitySchema.safeParse({
+      ...validActivity,
+      icu_training_load: null,
+      icu_atl: null,
+      icu_ctl: null,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.icu_atl).toBe(0);
+      expect(result.data.icu_ctl).toBe(0);
+    }
   });
 
-  it('requires icu_ctl (Fitness)', () => {
-    const { icu_ctl, ...rest } = validActivity;
-    const result = IntervalsActivitySchema.safeParse(rest);
-    expect(result.success).toBe(false);
+  it('still rejects a payload with no id or type', () => {
+    const { id, type, ...rest } = validActivity;
+    expect(IntervalsActivitySchema.safeParse(rest).success).toBe(false);
   });
 });
 
@@ -208,5 +245,38 @@ describe('IntervalsIntervalSchema — icu_training_load', () => {
     if (result.success) {
       expect(result.data.icu_training_load).toBeUndefined();
     }
+  });
+
+  it('accepts an auto-detected lap, which always has label: null', () => {
+    // Intervals.icu labels laps only for structured workouts. Every lap of an
+    // auto-detected session carries label: null — rejecting those discards the
+    // entire rep-level analysis for that session.
+    const result = IntervalsIntervalSchema.safeParse({
+      label: null,
+      type: 'WORK',
+      distance: 62.0,
+      moving_time: 8,
+      elapsed_time: 8,
+      average_speed: 7.777,
+      max_speed: 8.155,
+      training_load: 0.4,
+      start_index: 1120,
+      end_index: 1128,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.max_speed).toBe(8.155);
+    }
+  });
+
+  it('accepts a lap whose distance or training_load is null', () => {
+    const result = IntervalsIntervalSchema.safeParse({
+      label: null,
+      type: 'RECOVERY',
+      distance: null,
+      moving_time: 60,
+      training_load: null,
+    });
+    expect(result.success).toBe(true);
   });
 });

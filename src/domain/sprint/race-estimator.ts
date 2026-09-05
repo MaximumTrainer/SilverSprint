@@ -1,12 +1,22 @@
 import type { NFIStatus } from '../types';
 import type { TrackInterval } from './parser';
+import {
+  AGE_DEGRADATION_PER_YEAR,
+  CALIBRATABLE_DISTANCES,
+  NEUTRAL_CALIBRATION,
+  RaceCalibration,
+  RaceDistance,
+  RaceResult,
+  agePenaltyFactor,
+  buildRaceCalibration,
+  calibrationFactorFor,
+} from './race-results';
 
 /**
- * Age degradation rate: ~0.7% per year past age 35.
- * Based on WMA masters performance data.
- * Shared conceptually with race-plan.ts (which uses its own simplified model).
+ * Age degradation rate: ~0.7% per year past age 35, from WMA masters data.
+ * Defined in race-results.ts and re-exported here for existing callers.
  */
-export const AGE_DEGRADATION_PER_YEAR = 0.007;
+export { AGE_DEGRADATION_PER_YEAR };
 
 export interface RaceEstimate {
   distance: 100 | 200 | 400;
@@ -20,7 +30,17 @@ export interface RaceEstimate {
   note: string;
   /** Breakdown of time phases (start, drive, maintain, deceleration) */
   phases: RacePhaseBreakdown;
+  /**
+   * How the athlete's own race results informed this prediction:
+   *   'direct'   — calibrated against a result at this exact distance
+   *   'inferred' — calibrated from results at other distances
+   *   'none'     — pure velocity model
+   */
+  calibration: RaceCalibrationSource;
 }
+
+/** @see RaceEstimate.calibration */
+export type RaceCalibrationSource = 'direct' | 'inferred' | 'none';
 
 export interface RacePhaseBreakdown {
   /** Reaction + block clearance (s) */
@@ -64,6 +84,11 @@ export interface RaceEstimatorInput {
   activityCount: number;
   /** Parsed training intervals from recent sessions (optional — improves accuracy) */
   trainingIntervals?: TrackInterval[];
+  /**
+   * Per-distance correction derived from race times the athlete has actually
+   * run. When absent the pure velocity model is used unchanged.
+   */
+  calibration?: RaceCalibration | null;
 }
 
 /**
@@ -188,6 +213,42 @@ export class RaceEstimator {
     return distances.map((d) => this.estimateDistance(d, input));
   }
 
+  /**
+   * Build the calibration implied by race times the athlete has actually run.
+   *
+   * The athlete's results are compared against this model's prediction **at
+   * neutral readiness** (NFI 1.0, TSB 0), not against today's readiness-
+   * modified figure. A race is run rested; comparing it with a prediction that
+   * already carries today's fatigue penalty would bake that transient state
+   * into a permanent correction factor.
+   *
+   * Pass the returned calibration back into {@link estimate} via
+   * `RaceEstimatorInput.calibration`.
+   */
+  static calibrate(
+    input: RaceEstimatorInput,
+    results: RaceResult[],
+    now: Date = new Date(),
+  ): RaceCalibration {
+    if (results.length === 0) return NEUTRAL_CALIBRATION;
+
+    const neutralInput: RaceEstimatorInput = {
+      ...input,
+      nfi: 1.0,
+      nfiStatus: 'green',
+      tsb: 0,
+      calibration: null,
+    };
+
+    const baselineTimes: Partial<Record<RaceDistance, number>> = {};
+    for (const distance of CALIBRATABLE_DISTANCES) {
+      const estimate = this.estimateDistance(distance, neutralInput);
+      if (estimate.predictedTime > 0) baselineTimes[distance] = estimate.predictedTime;
+    }
+
+    return buildRaceCalibration({ results, baselineTimes, age: input.age, now });
+  }
+
   private static estimateDistance(
     distance: 100 | 200 | 400,
     input: RaceEstimatorInput,
@@ -203,6 +264,7 @@ export class RaceEstimator {
         confidence: 'low',
         note: 'Insufficient velocity data',
         phases: { reaction: 0, acceleration: 0, maxVelocity: 0, deceleration: 0 },
+        calibration: 'none',
       };
     }
 
@@ -227,21 +289,30 @@ export class RaceEstimator {
 
     let avgSpeed = effectiveVmax * sustainFraction;
 
-    // Age adjustment: degrade by 0.7% per year past 35
-    const agePenalty = input.age > 35 ? 1 - (input.age - 35) * AGE_DEGRADATION_PER_YEAR : 1;
-    avgSpeed *= Math.max(agePenalty, 0.65); // Floor at 35% degradation
+    // Age adjustment: degrade by 0.7% per year past 35, floored at 65%
+    avgSpeed *= agePenaltyFactor(input.age);
 
     // Neural readiness modifier: NFI < 1.0 means current form is below baseline
     // Apply a mild modifier (up to ±2%) based on current readiness
     const readinessModifier = this.getReadinessModifier(input.nfi, input.tsb);
     avgSpeed *= readinessModifier;
 
+    // Calibration against races the athlete has actually run. A factor above
+    // 1.0 means the velocity model is optimistic for this athlete, so the
+    // modelled race speed is scaled down by the same proportion. Applying it
+    // to the running speed rather than the finished time keeps the phase
+    // breakdown coherent and leaves reaction time — which is not a function of
+    // fitness — untouched.
+    const calibrationFactor = calibrationFactorFor(input.calibration, distance);
+    avgSpeed /= calibrationFactor;
+
     // Calculate time = distance / avgSpeed + reaction
     const rawTime = distance / avgSpeed + this.REACTION_TIME;
     const predictedTime = parseFloat(rawTime.toFixed(2));
 
-    const confidence = this.getConfidence(input, profile);
-    const note = this.getNote(distance, input, readinessModifier, profile);
+    const calibrationSource = this.getCalibrationSource(input.calibration, distance);
+    const confidence = this.getConfidence(input, profile, calibrationSource);
+    const note = this.getNote(distance, input, readinessModifier, profile, calibrationSource, calibrationFactor);
     const phases = this.computePhaseBreakdown(distance, effectiveVmax, avgSpeed, profile);
 
     return {
@@ -251,6 +322,7 @@ export class RaceEstimator {
       confidence,
       note,
       phases,
+      calibration: calibrationSource,
     };
   }
 
@@ -322,10 +394,25 @@ export class RaceEstimator {
     };
   }
 
+  /** Whether this distance is backed by the athlete's own result, or inferred from others. */
+  private static getCalibrationSource(
+    calibration: RaceCalibration | null | undefined,
+    distance: RaceDistance,
+  ): RaceCalibrationSource {
+    if (!calibration || calibration.resultCount === 0) return 'none';
+    return calibration.calibratedDistances.includes(distance) ? 'direct' : 'inferred';
+  }
+
   private static getConfidence(
     input: RaceEstimatorInput,
     profile: TrainingProfile | null,
+    calibrationSource: RaceCalibrationSource = 'none',
   ): 'high' | 'moderate' | 'low' {
+    // A real result at this distance is the strongest evidence available —
+    // but only when there is current velocity data to project it forward from.
+    const hasVelocityData = input.bestVmax60d > 0 || input.avgVmax > 0;
+    if (calibrationSource === 'direct' && hasVelocityData) return 'high';
+
     // Training history boosts confidence
     const hasGoodHistory = profile !== null
       && profile.seIntervalCount >= 2
@@ -334,6 +421,7 @@ export class RaceEstimator {
     if (input.activityCount >= 10 && input.bestVmax60d > 0 && hasGoodHistory) return 'high';
     if (input.activityCount >= 10 && input.bestVmax60d > 0) return 'high';
     if (input.activityCount >= 3) return 'moderate';
+    if (calibrationSource !== 'none' && hasVelocityData) return 'moderate';
     return 'low';
   }
 
@@ -342,8 +430,19 @@ export class RaceEstimator {
     input: RaceEstimatorInput,
     readinessMod: number,
     profile: TrainingProfile | null,
+    calibrationSource: RaceCalibrationSource = 'none',
+    calibrationFactor = 1,
   ): string {
     const parts: string[] = [];
+
+    if (calibrationSource !== 'none') {
+      const deltaPct = Math.round(Math.abs(calibrationFactor - 1) * 100);
+      const direction = calibrationFactor > 1 ? 'slower' : 'faster';
+      const label = calibrationSource === 'direct'
+        ? `Calibrated to your ${distance}m`
+        : 'Calibrated from your race times';
+      parts.push(deltaPct >= 1 ? `${label} (${deltaPct}% ${direction})` : label);
+    }
 
     if (profile && profile.seIntervalCount >= 2) {
       parts.push(`SE index ${(profile.speedEnduranceIndex * 100).toFixed(0)}%`);

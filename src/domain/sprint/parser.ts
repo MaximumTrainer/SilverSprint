@@ -132,12 +132,12 @@ export class SprintParser {
    * Only sprint-range intervals (≥ 10m and ≤ 400m) are included.
    */
   public static fromAPIInterval(interval: {
-    distance?: number;
-    elapsed_time?: number;
-    moving_time?: number;
-    average_speed?: number;
-    max_speed?: number;
-    type?: string;
+    distance?: number | null;
+    elapsed_time?: number | null;
+    moving_time?: number | null;
+    average_speed?: number | null;
+    max_speed?: number | null;
+    type?: string | null;
   }): TrackInterval | null {
     // Exclude explicit rest/recovery segments; accept everything else (WORK, ACTIVE, INTERVAL, LAP, etc.)
     if (interval.type && (this.REST_INTERVAL_TYPES as readonly string[]).includes(interval.type)) {
@@ -146,10 +146,15 @@ export class SprintParser {
 
     const distance = interval.distance ?? 0;
     const duration = interval.moving_time ?? interval.elapsed_time ?? 0;
-    // Prefer max_speed; fall back to average_speed when max_speed is absent or zero
-    // (some devices / Intervals.icu workouts omit peak-speed data for intervals)
-    const vMax = interval.max_speed || interval.average_speed || 0;
-    const flyingVelocity = interval.average_speed ?? 0;
+    const averageSpeed = interval.average_speed ?? 0;
+    // Peak speed is the greater of the two reported speeds, not simply max_speed.
+    // On short laps the device computes average_speed and max_speed over
+    // different windows and can report average_speed > max_speed; taking
+    // max_speed alone would then yield a flying velocity faster than the rep's
+    // own peak, which is physically impossible and inflates the race model.
+    // The fallback also covers workouts where peak speed is omitted entirely.
+    const vMax = Math.max(interval.max_speed ?? 0, averageSpeed);
+    const flyingVelocity = averageSpeed;
 
     if (distance < this.MIN_REP_DISTANCE || distance > this.MAX_SPRINT_DISTANCE || duration <= 0 || vMax <= 0) {
       return null;
@@ -196,6 +201,8 @@ export class SprintParser {
         bestAvg = windowAvg;
       }
     }
-    return parseFloat(bestAvg.toFixed(2));
+    // Rounding a near-constant burst up can push the sustained average past the
+    // burst's own peak (e.g. 7.995 → 8.00), which is physically impossible.
+    return Math.min(parseFloat(bestAvg.toFixed(2)), Math.max(...burst));
   }
 }

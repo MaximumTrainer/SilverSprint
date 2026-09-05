@@ -1,11 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Zap, Activity, Dumbbell, User, LogOut, Send, Clock, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Info, Timer, Flag, Calendar,
+  Zap, Activity, Dumbbell, User, LogOut, Send, Clock, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Info, Timer, Flag, Calendar, Trophy,
 } from 'lucide-react';
 import { SilverSprintLogic, NFIStatus } from '../domain/sprint/core';
 import { StrengthPeriodization } from '../domain/sprint/periodization';
 import { SprintWorkoutGenerator, SprintWorkout, isStaleVmax } from '../domain/sprint/workouts';
 import { RaceEstimate } from '../domain/sprint/race-estimator';
+import { RaceCalibration, RaceResult } from '../domain/sprint/race-results';
+import { RaceResultsPanel } from './RaceResultsPanel';
 import { SprintRacePlan, PriorRaceContext } from '../domain/sprint/race-plan';
 import type { TrainingPlanContext } from '../domain/sprint/training-plan';
 import { TimeSeriesChart } from './TimeSeriesChart';
@@ -35,6 +37,14 @@ interface DashboardProps {
   raceEstimates: RaceEstimate[];
   /** Predicted times at green neural readiness. Empty when already green. */
   recoveredEstimates: RaceEstimate[];
+  /** Race times the athlete has entered, newest first. */
+  raceResults: RaceResult[];
+  /** The correction those results apply to the estimates. */
+  raceCalibration: RaceCalibration;
+  /** Add a known race time. Returns null when the entry is rejected. Omitted in demo mode. */
+  onAddRaceResult?: (draft: Omit<RaceResult, 'id'>) => RaceResult | null;
+  /** Remove a known race time. Omitted in demo mode. */
+  onRemoveRaceResult?: (id: string) => void;
   sprintRacePlans: SprintRacePlan[];
   /** 12-week training plan context, present when a race is within 84 days */
   trainingPlan: TrainingPlanContext | null;
@@ -195,6 +205,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   dailyTimeSeries,
   raceEstimates,
   recoveredEstimates,
+  raceResults,
+  raceCalibration,
+  onAddRaceResult,
+  onRemoveRaceResult,
   sprintRacePlans,
   trainingPlan,
   onLogout,
@@ -755,7 +769,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <Timer size={16} style={{ color: 'var(--icu-primary)' }} />
             <span className="icu-section-title" style={{ marginBottom: 0 }}>Outdoor Track Estimates</span>
             <span style={{ fontSize: 10, color: 'var(--icu-text-disabled)', marginLeft: 'auto' }}>
-              Training history · Age-adjusted · Readiness-modified
+              {raceCalibration.resultCount > 0
+                ? 'Calibrated to your race times · Age-adjusted · Readiness-modified'
+                : 'Training history · Age-adjusted · Readiness-modified'}
             </span>
           </div>
 
@@ -821,6 +837,33 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       {est.confidence} confidence
                     </span>
                   </div>
+
+                  {est.calibration !== 'none' && (
+                    <div
+                      title={
+                        est.calibration === 'direct'
+                          ? `Calibrated against a ${est.distance}m time you have run`
+                          : 'Calibrated from your race times at other distances'
+                      }
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        fontSize: 9,
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        marginBottom: 4,
+                        color: est.calibration === 'direct' ? 'var(--icu-primary)' : 'var(--icu-text-disabled)',
+                        border: `1px solid ${est.calibration === 'direct' ? 'var(--icu-primary)' : 'var(--icu-border)'}`,
+                      }}
+                    >
+                      <Trophy size={9} />
+                      {est.calibration === 'direct' ? 'Calibrated' : 'Inferred'}
+                    </div>
+                  )}
 
                   {/* Phase breakdown bar */}
                   {showPhases && (
@@ -910,6 +953,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
               );
             })}
           </div>
+
+          <RaceResultsPanel
+            results={raceResults}
+            calibration={raceCalibration}
+            onAdd={onAddRaceResult}
+            onRemove={onRemoveRaceResult}
+          />
         </div>
 
         {/* ── 12-Week Training Plan ────────────────────────── */}

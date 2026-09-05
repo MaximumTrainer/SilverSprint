@@ -724,3 +724,85 @@ describe('SprintParser.parseTrackSession — 400m distance and 25s duration filt
     expect(result[0].distance).toBeLessThanOrEqual(150);
   });
 });
+
+describe('SprintParser.fromAPIInterval — peak vs average speed consistency', () => {
+  it('never reports a flying velocity faster than the rep max velocity', () => {
+    // Observed on real Intervals.icu laps: on a very short rep the device
+    // computes average_speed and max_speed over different windows and can
+    // report average_speed > max_speed.
+    const rep = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 36,
+      moving_time: 5,
+      elapsed_time: 5,
+      average_speed: 7.212,
+      max_speed: 5.71,
+    });
+
+    expect(rep).not.toBeNull();
+    expect(rep!.flyingVelocity).toBeLessThanOrEqual(rep!.vMax);
+    expect(rep!.vMax).toBe(7.212);
+  });
+
+  it('still prefers max_speed when it is the higher of the two', () => {
+    const rep = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 62,
+      moving_time: 8,
+      average_speed: 7.777,
+      max_speed: 8.155,
+    });
+
+    expect(rep!.vMax).toBe(8.155);
+    expect(rep!.flyingVelocity).toBe(7.777);
+  });
+
+  it('falls back to average_speed when the lap omits peak speed', () => {
+    const rep = SprintParser.fromAPIInterval({
+      type: 'WORK',
+      distance: 60,
+      moving_time: 8,
+      average_speed: 7.5,
+      max_speed: null,
+    });
+
+    expect(rep!.vMax).toBe(7.5);
+  });
+
+  it('accepts an auto-detected lap whose optional fields are null', () => {
+    const rep = SprintParser.fromAPIInterval({
+      type: null,
+      distance: 62,
+      moving_time: 8,
+      elapsed_time: null,
+      average_speed: 7.777,
+      max_speed: 8.155,
+    });
+
+    expect(rep).not.toBeNull();
+    expect(rep!.type).toBe('MaxVelocity');
+  });
+});
+
+describe('SprintParser.parseTrackSession — peak vs sustained speed consistency', () => {
+  it('never reports a flying velocity faster than the burst peak', () => {
+    // A near-constant burst rounds the 3s sustained average up past its own
+    // peak (7.995 → 8.00) unless the result is clamped.
+    const stream = [0, ...Array(12).fill(7.995), 0];
+    const result = SprintParser.parseTrackSession({ velocity_smooth: stream });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].flyingVelocity).toBeLessThanOrEqual(result[0].vMax);
+  });
+
+  it('holds the invariant across a full mixed session', () => {
+    const rep = (peak: number) => [1.5, peak * 0.5, peak * 0.85, peak, peak, peak * 0.9, 2.0];
+    const stream = [0, ...rep(8.314), 0, 0, ...rep(7.995), 0, 0, ...rep(9.0), 0];
+    const result = SprintParser.parseTrackSession({ velocity_smooth: stream });
+
+    expect(result.length).toBeGreaterThan(0);
+    for (const interval of result) {
+      expect(interval.flyingVelocity).toBeLessThanOrEqual(interval.vMax);
+    }
+  });
+});

@@ -22,6 +22,14 @@ Compares today's max velocity against a rolling 30-day baseline:
 
 $$NFI = \frac{V_{max,today}}{V_{max,30d\;avg}}$$
 
+The baseline counts **only sessions that actually reached sprint speed** — those
+whose Vmax is at least 85% of the best Vmax in the window. Easy runs, warm-up
+jogs and trail runs peak several m/s below sprint Vmax, so averaging every
+logged run pulls the baseline far under true top speed and leaves NFI
+permanently above 1.0, which disables the traffic light entirely. Activities
+with no GPS trace (`max_speed: null`) carry no velocity signal and are skipped
+rather than counted as 0 m/s.
+
 Traffic-light system: **Green** (>97%) · **Amber** (94–97%) · **Red** (<94%)
 
 Stale-Vmax detection: when NFI is low but TSB is positive, the system recognises detraining rather than fatigue and recommends a neural re-activation session instead of rest.
@@ -80,9 +88,33 @@ Predicts 100 m, 200 m, and 400 m race times with a multi-layer model:
 2. **Training profile** adjustments (SE index, flying velocity, acceleration quality)
 3. **Age penalty:** $\max(1 - (age - 35) \times 0.007,\; 0.65)$ — derived from WMA masters data
 4. **Readiness modifier** from NFI & TSB (±3%)
-5. **Phase breakdown** visualization: reaction → acceleration → max velocity → deceleration
+5. **Calibration** against races you have actually run (see below)
+6. **Phase breakdown** visualization: reaction → acceleration → max velocity → deceleration
 
 When NFI is amber/red, a "fully recovered" comparison estimate is shown.
+
+### Calibration From Your Own Race Times
+
+The velocity model cannot know your start technique or race-day mechanics — an
+actual result can. Enter times you have really run and each prediction is
+corrected against them.
+
+| Step | What happens |
+|---|---|
+| Age equivalence | A time run at 46 is converted to the time it implies at your current age, using the same 0.7%/year curve the estimator applies. Without this, every older result would look like proof the model is pessimistic. |
+| Comparison | The age-equivalent time is compared with the model's prediction **at neutral readiness** (NFI 1.0, TSB 0), so today's fatigue is never baked into a permanent correction. |
+| Recency weighting | Exponential, 18-month half-life. Results older than five years are ignored entirely. |
+| Confidence shrinkage | Thin or old evidence is damped toward no correction, so one three-year-old time cannot steer the model as hard as last week's race. |
+| Cross-distance transfer | A distance with no result of its own inherits half the average correction, and is labelled **Inferred** rather than **Calibrated**. |
+| Clamp | Corrections are bounded to ±20%. Entries outside plausible per-distance time ranges are rejected outright. |
+
+A distance backed by your own result is marked **Calibrated** and reported at
+high confidence.
+
+**Persistence:** race times are stored per athlete in `localStorage`, so they
+survive reloads and browser restarts for exactly as long as your login does.
+Logging out is the only thing that clears them. They never leave the browser —
+entering a result costs no Intervals.icu request.
 
 ### Multi-Race Planner
 
@@ -145,9 +177,18 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
          │                 │                      │
    ┌─────▼──────┐  ┌──────▼───────────┐  ┌──────▼──────────┐
    │ api/       │  │ useIntervalsData │  │ Vite Dev Proxy  │
-   │ Webhook    │  │ (React hook)     │  │ /intervals → icu│
+   │ Webhook    │  │ (React adapter)  │  │ /intervals → icu│
    │ Handler    │  └──────┬───────────┘  └─────────────────┘
-   └────────────┘         │
+   └────────────┘         │  HttpGet port
+               ┌──────────▼──────────────────────────────┐
+               │          Application Layer               │
+               │  dashboard-sync.ts                       │
+               │    buildDashboardState() fetches every    │
+               │    Intervals.icu resource through the     │
+               │    HttpGet port and derives dashboard     │
+               │    state. No React, no fetch: testable.   │
+               └──────────┬──────────────────────────────┘
+                          │
                ┌──────────▼──────────────────────────────┐
                │            Domain Layer                  │
                │                                          │
@@ -195,6 +236,7 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   ├── components/
 │   │   ├── AuthGate.tsx       # Login screen with API validation
 │   │   ├── Dashboard.tsx      # Main dashboard UI
+│   │   ├── RaceResultsPanel.tsx    # Enter known race times
 │   │   ├── SpringTrainingPanel.tsx  # 7-tab fascia training module
 │   │   └── TimeSeriesChart.tsx     # Reusable 60-day trend chart
 │   ├── domain/
@@ -206,6 +248,7 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │   │   ├── custom-streams.ts  # NFI custom stream payloads
 │   │   │   ├── periodization.ts   # TSB-driven strength periodization
 │   │   │   ├── race-estimator.ts  # Multi-factor race time predictions
+│   │   │   ├── race-results.ts    # Known race times + model calibration
 │   │   │   ├── race-plan.ts       # Multi-race training planner
 │   │   │   └── workouts.ts       # NFI-adaptive sprint workout generator
 │   │   └── recovery/
@@ -214,9 +257,15 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │       ├── oscillatory-isometric.ts # 3-phase OI protocol
 │   │       ├── readiness.ts             # Morning check-in assessment
 │   │       └── recovery-modalities.ts   # Tempo, breathing, hydrotherapy
+│   ├── application/
+│   │   └── dashboard-sync.ts    # buildDashboardState use case (HttpGet port)
 │   └── hooks/
-│       └── useIntervalsData.ts  # Central data-fetching hook
+│       ├── useIntervalsData.ts  # React adapter over buildDashboardState
+│       └── useRaceResults.ts    # Known race times + per-athlete persistence
 ├── tests/                       # Mirrors src/ structure with *.test.ts files
+│   ├── application/             # End-to-end ingestion tests
+│   └── fixtures/
+│       └── intervals-api.ts     # Mock Intervals.icu API (real response shapes)
 ├── logs/                        # Server log output (dev)
 ├── index.html                   # SPA entry
 ├── package.json
@@ -228,15 +277,38 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 
 ---
 
+## Intervals.icu API Quirks
+
+`tests/fixtures/intervals-api.ts` is a mock Intervals.icu that reproduces the
+live API's real response shapes. Each trait below was observed on a live masters
+account and is covered by a test; the fixture identity and values are synthetic,
+so no athlete data lives in the repo.
+
+| Trait | Why it matters |
+|---|---|
+| `/activities` is **newest-first**, `/wellness` is **oldest-first** | Assuming one ordering for both makes `entries[0]` a 60-day-old HRV reading. Sort by date; never trust payload order. |
+| `max_speed` is `null` on manual / no-GPS activities | A required-number schema drops those sessions from the athlete's history entirely. `null` means "no velocity data", not 0 m/s. |
+| Auto-detected laps always carry `label: null` | `z.string().optional()` rejects `null`, so every lap of every unstructured session fails validation and all rep-level analysis is silently lost. |
+| `/streams` returns a **bare array** of `{ type, data }` | It is not a map keyed by stream name. Reading `streams.velocity_smooth.data` yields nothing, disabling the stream-parsing fallback. |
+| Velocity streams contain `null` samples | GPS dropouts. They must be stripped before `Math.max` and running sums. |
+| Warm-up jogs are typed `WORK` | Lap `type` does not identify sprint efforts; distance, duration and pace filters do. |
+| `RECOVERY` laps often hold the session's highest `max_speed` | The lap boundary lands inside the preceding sprint. |
+| `average_speed` can exceed `max_speed` on short laps | The two are computed over different windows. Taking `max_speed` alone yields a flying velocity faster than the rep's own peak. |
+| Athlete weight lives in `icu_weight`; Strava `weight` is `null` | Body-weight-derived strength loads come out empty otherwise. |
+| Bursts of per-activity requests draw `429` | The events request is issued up front, not after one call per activity, so race planning is not the feature that disappears under the rate limiter. |
+
+---
+
 ## Key Formulas
 
 | Metric | Formula |
 |---|---|
-| NFI | $\frac{V_{max,today}}{V_{max,30d\;avg}}$ |
+| NFI | $\frac{V_{max,today}}{V_{max,30d\;avg}}$, baseline over sessions with $V_{max} \ge 0.85 \cdot V_{max,best}$ |
 | SRS | $0.45 \cdot HRV_{score} + 0.30 \cdot TSB_{score} + 0.25 \cdot NFI_{score}$ |
 | Recovery Window | $48 + \max(0, (age-40) \times 6) + \text{round}((1 - SRS/100) \times 48)$ hrs |
 | Age Degradation | $\max(1 - (age-35) \times 0.007,\; 0.65)$ |
-| Race Time | $\frac{distance}{V_{max} \times sustainFrac \times agePenalty \times readinessMod} + 0.15\text{s}$ |
+| Race Time | $\frac{distance}{V_{max} \times sustainFrac \times agePenalty \times readinessMod \;/\; calibration} + 0.15\text{s}$ |
+| Calibration factor | weighted mean of $\frac{t_{ageEquivalent}}{t_{model,neutral}}$, shrunk by evidence weight, clamped to $[0.85, 1.2]$ |
 | Neural Budget | $50 + \sum(\text{event costs})$, clamped $[0, 100]$ |
 | RSI | $\frac{jumpHeight_m}{contactTime_s}$ |
 

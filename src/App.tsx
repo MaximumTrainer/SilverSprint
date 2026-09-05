@@ -2,6 +2,9 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { OAuthCallbackPage } from './components/OAuthCallbackPage';
 import { Dashboard, AthleteData } from './components/Dashboard';
 import { useIntervalsData } from './hooks/useIntervalsData';
+import { useRaceResults } from './hooks/useRaceResults';
+import { clearRaceResults, clearAllRaceResults } from './lib/race-results-storage';
+import { NEUTRAL_CALIBRATION } from './domain/sprint/race-results';
 import { SprintWorkout } from './domain/sprint/workouts';
 import { clientLogger } from './logger';
 import { AlertCircle, Zap } from 'lucide-react';
@@ -80,11 +83,18 @@ const App: React.FC = () => {
     initAuth();
   }, [isOAuthCallbackPath]);
 
-  // 2. Fetch data using our custom hook
+  // 2a. Known race times — persisted locally per athlete, cleared on logout.
+  const {
+    results: raceResults,
+    addResult: addRaceResult,
+    removeResult: removeRaceResult,
+  } = useRaceResults(auth?.athleteId || '');
+
+  // 2b. Fetch data using our custom hook
   const {
     intervals, wellness, nfi, nfiStatus, avgVmax, todayVmax,
-    recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, loading, error,
-  } = useIntervalsData(auth?.athleteId || '', auth?.accessToken || '', auth?.authType || 'basic');
+    recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, raceCalibration, loading, error,
+  } = useIntervalsData(auth?.athleteId || '', auth?.accessToken || '', auth?.authType || 'basic', raceResults);
 
   const handleOAuthLogin = async () => {
     try {
@@ -98,6 +108,13 @@ const App: React.FC = () => {
   const handleLogout = () => {
     sessionStorage.removeItem('silver_sprint_auth');
     clearAuthCookie();
+    // Known race times live as long as the login does — logging out is the
+    // only thing that discards them.
+    if (auth?.athleteId) {
+      clearRaceResults(auth.athleteId);
+    } else {
+      clearAllRaceResults();
+    }
     // In dev mode, re-apply .env credentials instead of dropping to an empty auth gate
     const devAthleteId = import.meta.env.INTERVALS_ATHLETE_ID;
     const devApiKey = import.meta.env.INTERVALS_API_KEY;
@@ -195,6 +212,8 @@ const App: React.FC = () => {
         recoveredEstimates={mockRecoveredEstimates}
         sprintRacePlans={mockSprintRacePlans}
         trainingPlan={mockTrainingPlan}
+        raceResults={[]}
+        raceCalibration={NEUTRAL_CALIBRATION}
         onLogin={handleOAuthLogin}
         onLogout={() => {}}
         onPushWorkout={async () => false}
@@ -272,6 +291,10 @@ const App: React.FC = () => {
       recoveredEstimates={recoveredEstimates}
       sprintRacePlans={sprintRacePlans}
       trainingPlan={trainingPlan}
+      raceResults={raceResults}
+      raceCalibration={raceCalibration}
+      onAddRaceResult={addRaceResult}
+      onRemoveRaceResult={removeRaceResult}
       onLogout={handleLogout}
       onPushWorkout={handlePushWorkout}
       onPushSession={handlePushSession}
