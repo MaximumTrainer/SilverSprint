@@ -6,6 +6,15 @@ import { SprintTrainingPlan, TrainingPlanContext } from '../domain/sprint/traini
 import { RaceCalibration, RaceResult } from '../domain/sprint/race-results';
 import { TwoDayPlan, buildTwoDayPlan, findLastMaxEffort } from '../domain/sprint/daily-plan';
 import {
+  DEFAULT_PACE_CURVE_DISTANCES,
+  DEFAULT_PACE_CURVE_RANGE,
+  PaceCurve,
+  PaceCurveActivityStream,
+  computePaceCurve,
+  paceCurveWindowDays,
+  paceCurveWindowStart,
+} from '../domain/sprint/pace-curve';
+import {
   IntervalsActivitySchema,
   IntervalsWellnessSchema,
   IntervalsEventSchema,
@@ -53,6 +62,12 @@ export interface DashboardSyncDeps {
    * These come from local persistence, not from Intervals.icu.
    */
   raceResults?: RaceResult[];
+  /**
+   * Distances to seed the first pace curve with. The panel recomputes locally
+   * from `paceCurveStreams` whenever the athlete changes them, so this only
+   * decides what the very first render shows.
+   */
+  paceCurveDistances?: number[];
 }
 
 /**
@@ -99,6 +114,35 @@ export interface DashboardState {
    * forecast, falling back to an explicit rest-day decay model.
    */
   dailyPlan: TwoDayPlan;
+  /**
+   * Per-activity velocity/distance streams for every run in the pace-curve
+   * window, keyed by activity.
+   *
+   * Held on the state so that changing the charted distances is pure local
+   * arithmetic: the panel re-runs `computePaceCurve` over these and issues no
+   * Intervals.icu request at all.
+   */
+  paceCurveStreams: PaceCurveActivityStream[];
+  /** The curve for the default distance set and range, ready for first render. */
+  paceCurve: PaceCurve;
+  /**
+   * How much of the athlete's history the curve actually saw.
+   *
+   * A curve built from a fraction of the eligible sessions is not a mean-maximal
+   * curve, it is a lower bound — and it fails in the most misleading direction,
+   * quietly promoting a warm-up jog to "your best 400 m". Coverage is carried
+   * out to the UI so a short fetch is stated rather than implied.
+   */
+  paceCurveCoverage: PaceCurveCoverage;
+}
+
+export interface PaceCurveCoverage {
+  /** Run activities inside the curve's date window. */
+  eligible: number;
+  /** Activities whose stream was asked for, after the request cap. */
+  requested: number;
+  /** Activities whose stream came back usable. */
+  fetched: number;
 }
 
 /** Number of days of historical activity/wellness data to fetch */
@@ -109,6 +153,48 @@ export const RACE_LOOKAHEAD_DAYS = 90;
 export const DEFAULT_HRV = 60;
 /** Days of forward CTL/ATL projection to request for the next-day recommendation */
 export const WELLNESS_LOOKAHEAD_DAYS = 2;
+/**
+ * Ceiling on how many activities the pace curve will pull streams for.
+ *
+ * Measured against a live account: 118 runs in a season-to-date window issued
+ * 144 requests in 4 seconds, of which **64 came back 429**. The curve was then
+ * built from 4 activities and reported a 400 m "best" of 117 s — a warm-up jog
+ * — because the athlete's actual 400 m races were among the requests that were
+ * refused. A silently wrong number is worse than a coarser one, so the request
+ * count is bounded here rather than discovered at the rate limiter.
+ *
+ * 40 is chosen from that same account: ranked by `max_speed`, every genuine
+ * race fell in the top 30 of 118.
+ */
+export const PACE_CURVE_MAX_STREAM_ACTIVITIES = 40;
+/** Stream requests in flight at once — enough to be quick, few enough not to burst. */
+const STREAM_FETCH_CONCURRENCY = 4;
+/**
+ * Attempts per per-activity request before giving up on it.
+ *
+ * Two is enough: on a live account 8 of 80 requests drew a 429 and every one
+ * of them succeeded on the first retry. A longer schedule only lengthens the
+ * sync in the case where the limiter is saturated and retrying is futile.
+ */
+const RATE_LIMIT_RETRIES = 2;
+/** First backoff step after a 429, in ms; doubled on each further attempt. */
+const RATE_LIMIT_BACKOFF_MS = 1000;
+/**
+ * Requests that may exhaust their retries before the sync stops retrying at all.
+ *
+ * Backing off is right for a limiter that is nearly satisfied and wrong for one
+ * that is saturated: retrying every one of 40 activities through a full backoff
+ * schedule turns a 4-second sync into a multi-minute one and still returns
+ * nothing. Past this many exhausted requests the sync accepts reduced coverage,
+ * reports it, and finishes.
+ */
+const RATE_LIMIT_GIVE_UP_AFTER = 2;
+
+/** Shared across one sync, so the whole run backs off — or gives up — together. */
+interface RateLimitBudget {
+  exhausted: number;
+  retriesDisabled: boolean;
+}
 
 /**
  * Fetches every Intervals.icu resource the dashboard needs and derives the
@@ -127,6 +213,11 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
 
   const oldest = formatDateDaysAgo(now, LOOKBACK_DAYS);
   const newest = formatDateDaysAgo(now, 0);
+  // The pace curve reaches further back than the rest of the dashboard — up to
+  // season-to-date. Activities are a single request whatever the window, so
+  // one wider request is cheaper than a second one, and everything downstream
+  // of `activities` is partitioned back to the 60-day window below.
+  const paceCurveOldest = formatDateDaysAgo(now, paceCurveWindowDays(now));
   // Wellness endpoint uses an inclusive date range: today − 59 days → today = 60 days
   const wellnessOldest = formatDateDaysAgo(now, LOOKBACK_DAYS - 1);
   // Ask for a few days past today as well. Intervals.icu answers future dates
@@ -156,7 +247,7 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
 
   const [profileRes, activitiesRes, wellnessRes] = await Promise.all([
     httpGet(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}`),
-    httpGet(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/activities?oldest=${oldest}&newest=${newest}`),
+    httpGet(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/activities?oldest=${paceCurveOldest}&newest=${newest}`),
     httpGet(`${INTERVALS_BASE}/api/v1/athlete/${athleteId}/wellness?oldest=${wellnessOldest}&newest=${wellnessNewest}`),
   ]);
 
@@ -180,10 +271,19 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
   const rawActivities = await activitiesRes.json();
 
   // Validate each activity with Zod, keep only valid Runs
-  const activities: IntervalsActivity[] = (Array.isArray(rawActivities) ? rawActivities : [])
+  const runActivities: IntervalsActivity[] = (Array.isArray(rawActivities) ? rawActivities : [])
     .map((a: unknown) => IntervalsActivitySchema.safeParse(a))
     .filter((r): r is { success: true; data: IntervalsActivity } => r.success)
     .map((r) => r.data);
+
+  // Everything except the pace curve is a 60-day view of the athlete. Activities
+  // with no `start_date_local` cannot be placed in either window; they are kept
+  // here — the previous behaviour — and left out of the curve, which has to be
+  // able to date every point it plots.
+  const activities: IntervalsActivity[] = runActivities.filter((a) => {
+    const date = activityDate(a);
+    return date === null || date >= oldest;
+  });
 
   // 2. Process Wellness (HRV/Readiness) from wellness endpoint
   if (!wellnessRes.ok) {
@@ -278,9 +378,12 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
   // The /intervals endpoint provides accurate rep-level data (distance, max_speed,
   // moving_time) that is not present in the activity list response.
   const activitiesForIntervals = activities;
+  // One budget for the whole sync: the lap burst and the stream fetches share a
+  // limiter, so they must share the decision to stop retrying it.
+  const rateLimitBudget: RateLimitBudget = { exhausted: 0, retriesDisabled: false };
   const intervalFetches = await Promise.allSettled(
     activitiesForIntervals.map(async (a) => {
-      const res = await httpGet(`${INTERVALS_BASE}/api/v1/activity/${a.id}/intervals`);
+      const res = await httpGetWithBackoff(httpGet, `${INTERVALS_BASE}/api/v1/activity/${a.id}/intervals`, athleteId, logger, rateLimitBudget);
       if (!res.ok) return { intervals: [] as TrackInterval[], totalLoad: 0 };
       const raw = (await res.json()) as { icu_intervals?: unknown[] } | unknown[];
       // The /intervals endpoint returns { icu_intervals: [...], icu_groups: [...] },
@@ -305,12 +408,42 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
     })
   );
 
+  // ── activity streams ──────────────────────────────────────────────────────
+  // One `/streams` request per run activity, and never a second: the same
+  // response feeds the pace curve *and* the lap-parsing fallback below. The
+  // requests go out a few at a time rather than all at once — a full-width
+  // burst is what draws Intervals.icu's 429.
+  const streamCache = new Map<string, ActivityStreams | null>();
+  const fetchStreamsOnce = async (activityId: string): Promise<ActivityStreams | null> => {
+    const cached = streamCache.get(activityId);
+    if (cached !== undefined) return cached;
+    const fetched = await fetchActivityStreams(httpGet, activityId, athleteId, logger, rateLimitBudget);
+    streamCache.set(activityId, fetched);
+    return fetched;
+  };
+
+  // Ranked by peak speed, not recency. A sprint best lives in the sessions
+  // where the athlete actually sprinted, and `max_speed` already tells us
+  // which those are without spending a request to find out. On the live
+  // account this put every real race inside the top 30 of 118 runs, so the
+  // cap costs nothing that would have changed the curve.
+  const paceCurveEligible = runActivities.filter((a) => {
+    const date = activityDate(a);
+    return date !== null && date >= paceCurveOldest;
+  });
+  const paceCurveActivities = [...paceCurveEligible]
+    .sort((a, b) => (b.max_speed ?? 0) - (a.max_speed ?? 0))
+    .slice(0, PACE_CURVE_MAX_STREAM_ACTIVITIES);
+
+  await forEachWithConcurrency(paceCurveActivities, STREAM_FETCH_CONCURRENCY, async (a) => {
+    await fetchStreamsOnce(a.id);
+  });
+
   // Merge: for each activity use API intervals when available, else fall back
-  // to fetching the activity's /streams endpoint (for its velocity_smooth) and
-  // parsing it.  The activity list endpoint omits velocity_smooth, so the
-  // parseTrackSession fallback only works when the stream is fetched separately.
-  // To avoid an unbounded burst of fallback requests (rate-limit risk), we
-  // process activities that need a fallback sequentially.
+  // to the activity's velocity_smooth stream and parse that. The activity list
+  // endpoint omits velocity_smooth, so this fallback only works because the
+  // stream was fetched above (or, for an undated activity outside the curve
+  // window, is fetched here — still only once).
   const allTrainingIntervals: TrackInterval[] = [];
   for (let idx = 0; idx < activitiesForIntervals.length; idx++) {
     const a = activitiesForIntervals[idx];
@@ -328,42 +461,26 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
       continue;
     }
 
-    // Last resort: fetch the activity's /streams endpoint to get velocity_smooth.
-    // This is an extra API call per activity that lacked both interval and
-    // list-level stream data.  Sequential processing avoids rate-limit bursts.
-    try {
-      const streamsRes = await httpGet(`${INTERVALS_BASE}/api/v1/activity/${a.id}/streams`);
-      if (!streamsRes.ok) {
+    const streams = await fetchStreamsOnce(a.id);
+    if (!streams) continue;
+    // The parser has no notion of a dropout, so nulls are stripped for it.
+    // The pace curve reads the same samples with the nulls intact, because
+    // there it is precisely the gaps that must not be integrated across.
+    const velocitySmooth = streams.velocitySmooth.filter(
+      (value): value is number => typeof value === 'number' && Number.isFinite(value)
+    );
+    if (velocitySmooth.length === 0) {
+      if (streams.velocitySmooth.length > 0) {
         logger.warn(
-          `Failed to fetch velocity stream for activity ${a.id}: ${streamsRes.status} ${streamsRes.statusText}`,
+          `Skipping velocity stream for activity ${a.id}: stream contained no valid numeric samples`,
           athleteId
         );
-        continue;
       }
-      const streams = await streamsRes.json();
-      const rawVelocitySmooth = extractVelocitySmooth(streams);
-      const velocitySmooth = rawVelocitySmooth.filter(
-        (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
-      );
-      if (velocitySmooth.length === 0) {
-        if (rawVelocitySmooth.length > 0) {
-          logger.warn(
-            `Skipping velocity stream for activity ${a.id}: stream contained no valid numeric samples`,
-            athleteId
-          );
-        }
-        continue;
-      }
-      allTrainingIntervals.push(
-        ...SprintParser.parseTrackSession({ velocity_smooth: velocitySmooth })
-      );
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      logger.warn(
-        `Failed to fetch or parse velocity stream for activity ${a.id}: ${reason}`,
-        athleteId
-      );
+      continue;
     }
+    allTrainingIntervals.push(
+      ...SprintParser.parseTrackSession({ velocity_smooth: velocitySmooth })
+    );
   }
 
   // Aggregate total training load from ALL interval types across recent sessions.
@@ -374,6 +491,50 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
     .reduce((sum, r) => sum + r.value.totalLoad, 0);
 
   logger.info(`Parsed ${allTrainingIntervals.length} training intervals from ${activitiesForIntervals.length} activities (of ${activities.length} total), totalIntervalLoad=${totalIntervalLoad}`, athleteId);
+
+  // 8d. Sprint pace curve. Built from the streams already in hand, so the
+  // panel can re-chart any distance set without touching the network.
+  const paceCurveStreams: PaceCurveActivityStream[] = paceCurveActivities
+    .map((a): PaceCurveActivityStream | null => {
+      const streams = streamCache.get(a.id);
+      const date = activityDate(a);
+      if (!streams || date === null || streams.velocitySmooth.length === 0) return null;
+      return {
+        activityId: a.id,
+        name: a.name || `${a.type} on ${date}`,
+        date,
+        velocitySmooth: streams.velocitySmooth,
+        distance: streams.distance,
+        time: streams.time,
+      };
+    })
+    .filter((s): s is PaceCurveActivityStream => s !== null);
+
+  const paceCurveCoverage: PaceCurveCoverage = {
+    eligible: paceCurveEligible.length,
+    requested: paceCurveActivities.length,
+    fetched: paceCurveStreams.length,
+  };
+
+  const paceCurve = computePaceCurve({
+    streams: paceCurveStreams,
+    distances: deps.paceCurveDistances ?? [...DEFAULT_PACE_CURVE_DISTANCES],
+    since: paceCurveWindowStart(DEFAULT_PACE_CURVE_RANGE, now),
+    bestVmax60d,
+  });
+
+  logger.info(
+    `Pace curve — ${paceCurveCoverage.fetched}/${paceCurveCoverage.requested} stream(s) of ${paceCurveCoverage.eligible} eligible, `
+    + `${paceCurve.excludedEfforts} implausible effort(s) and ${paceCurve.excludedActivities} activity(ies) excluded`,
+    athleteId,
+  );
+  if (paceCurveCoverage.fetched < paceCurveCoverage.requested) {
+    logger.warn(
+      `Pace curve is incomplete — ${paceCurveCoverage.requested - paceCurveCoverage.fetched} stream(s) could not be fetched, `
+      + 'so a distance whose real best was in one of them will read slower than it should',
+      athleteId,
+    );
+  }
 
   // Compute a TSB that also reflects non-sprint interval training load.
   const recoveryTSB = SilverSprintLogic.computeIntervalAdjustedTSB(
@@ -541,6 +702,9 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
     raceEstimatorInput: raceInput,
     raceCalibration,
     dailyPlan,
+    paceCurveStreams,
+    paceCurve,
+    paceCurveCoverage,
   };
 }
 
@@ -580,22 +744,163 @@ function wellnessDate(w: IntervalsWellness): string {
   return w.date || w.id || '';
 }
 
+/** The `YYYY-MM-DD` an activity happened on, or null when it carries no date. */
+function activityDate(a: IntervalsActivity): string | null {
+  const raw = a.start_date_local;
+  if (typeof raw !== 'string' || raw.length < 10) return null;
+  return raw.slice(0, 10);
+}
+
+/** The three sample series the pace curve and the sprint parser read. */
+interface ActivityStreams {
+  /** Velocity in m/s. `null` marks a GPS dropout and is preserved. */
+  velocitySmooth: Array<number | null>;
+  /** Cumulative metres, when the device recorded one. */
+  distance?: Array<number | null>;
+  /** Elapsed seconds per sample, when the device recorded one. */
+  time?: Array<number | null>;
+}
+
 /**
- * Pull the raw `velocity_smooth` samples out of an Intervals.icu `/streams` response.
+ * GET a URL, waiting out Intervals.icu's rate limiter rather than treating a
+ * `429` as a permanent failure.
+ *
+ * This matters more than it looks. A refused per-activity request does not
+ * surface as an error — it silently removes one session from the analysis, and
+ * on a live account that turned a 400 m best of 61 s into 117 s because the
+ * race was among the requests that were refused. Backing off and retrying is
+ * the difference between a slower sync and a wrong number.
+ *
+ * `Retry-After` is honoured when present, since the server knows better than
+ * the doubling schedule does.
+ */
+async function httpGetWithBackoff(
+  httpGet: HttpGet,
+  url: string,
+  athleteId: string,
+  logger: SyncLogger,
+  budget: RateLimitBudget,
+): Promise<HttpResponse> {
+  let response = await httpGet(url);
+  if (response.status !== 429 || budget.retriesDisabled) return response;
+
+  for (let attempt = 1; attempt <= RATE_LIMIT_RETRIES && response.status === 429; attempt++) {
+    const retryAfter = Number(
+      (response as { headers?: { get(name: string): string | null } }).headers?.get?.('retry-after'),
+    );
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+      ? retryAfter * 1000
+      : RATE_LIMIT_BACKOFF_MS * 2 ** (attempt - 1);
+    logger.warn(`Rate limited — retrying in ${waitMs}ms (attempt ${attempt}/${RATE_LIMIT_RETRIES})`, athleteId);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    response = await httpGet(url);
+  }
+
+  if (response.status === 429) {
+    budget.exhausted++;
+    if (budget.exhausted >= RATE_LIMIT_GIVE_UP_AFTER && !budget.retriesDisabled) {
+      budget.retriesDisabled = true;
+      logger.warn(
+        'Rate limiter is saturated — finishing the sync with reduced coverage rather than waiting it out',
+        athleteId,
+      );
+    }
+  }
+  return response;
+}
+
+/**
+ * Fetch one activity's streams.
+ *
+ * `?types=` keeps the payload to the three series that are actually read —
+ * the unfiltered response also carries heart rate, cadence, altitude and
+ * position, which is several times the data for no use here.
+ *
+ * Returns null rather than throwing: a missing stream costs one activity's
+ * contribution to the curve, not the whole sync.
+ */
+async function fetchActivityStreams(
+  httpGet: HttpGet,
+  activityId: string,
+  athleteId: string,
+  logger: SyncLogger,
+  budget: RateLimitBudget,
+): Promise<ActivityStreams | null> {
+  try {
+    const res = await httpGetWithBackoff(
+      httpGet,
+      `${INTERVALS_BASE}/api/v1/activity/${activityId}/streams?types=time,distance,velocity_smooth`,
+      athleteId,
+      logger,
+      budget,
+    );
+    if (!res.ok) {
+      logger.warn(
+        `Failed to fetch streams for activity ${activityId}: ${res.status} ${res.statusText}`,
+        athleteId
+      );
+      return null;
+    }
+    const body = await res.json();
+    const velocitySmooth = toNullableNumbers(extractStream(body, 'velocity_smooth'));
+    if (velocitySmooth.length === 0) return null;
+
+    const distance = toNullableNumbers(extractStream(body, 'distance'));
+    const time = toNullableNumbers(extractStream(body, 'time'));
+    return {
+      velocitySmooth,
+      distance: distance.length === velocitySmooth.length ? distance : undefined,
+      time: time.length === velocitySmooth.length ? time : undefined,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    logger.warn(`Failed to fetch or parse streams for activity ${activityId}: ${reason}`, athleteId);
+    return null;
+  }
+}
+
+/**
+ * Run `worker` over `items`, at most `limit` at a time.
+ *
+ * Kept explicit rather than reaching for `Promise.all`: per-activity requests
+ * are exactly where this app has drawn Intervals.icu's rate limiter before.
+ */
+async function forEachWithConcurrency<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+/** Coerce raw stream samples to numbers, keeping dropouts as explicit nulls. */
+function toNullableNumbers(raw: unknown[]): Array<number | null> {
+  return raw.map((value) => (typeof value === 'number' && Number.isFinite(value) ? value : null));
+}
+
+/**
+ * Pull one named series out of an Intervals.icu `/streams` response.
  *
  * The live API answers with a bare **array** of `{ type, data }` stream objects
  * — not a map keyed by stream name. The keyed shapes are still accepted so that
  * proxies and older responses keep working.
  */
-function extractVelocitySmooth(streams: unknown): unknown[] {
+function extractStream(streams: unknown, type: string): unknown[] {
   if (Array.isArray(streams)) {
     const entry = streams.find(
       (s): s is { type?: unknown; data?: unknown } =>
-        typeof s === 'object' && s !== null && (s as { type?: unknown }).type === 'velocity_smooth'
+        typeof s === 'object' && s !== null && (s as { type?: unknown }).type === type
     );
     return Array.isArray(entry?.data) ? entry.data : [];
   }
-  const keyed = (streams as { velocity_smooth?: unknown })?.velocity_smooth;
+  const keyed = (streams as Record<string, unknown>)?.[type];
   if (Array.isArray(keyed)) return keyed;
   const keyedData = (keyed as { data?: unknown })?.data;
   return Array.isArray(keyedData) ? keyedData : [];

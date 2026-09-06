@@ -17,15 +17,26 @@
  *  3. `/streams` returns a bare **array** of `{ type, data }` objects, not a
  *     map keyed by stream name.
  *  4. Velocity streams contain occasional `null` samples (GPS dropout).
- *  5. Auto-detected laps are typed `WORK` even when they are warm-up jogs, and
+ *  5. A single spurious GPS fix can report 100+ m/s mid-session — the artifact
+ *     that makes Intervals.icu's own `/pace-curves` report 100 m in 1 second.
+ *  6. Auto-detected laps are typed `WORK` even when they are warm-up jogs, and
  *     `RECOVERY` laps often carry the highest `max_speed` in the session
  *     because the lap boundary lands inside the preceding sprint.
- *  6. `average_speed` can exceed `max_speed` on very short laps — the two
+ *  7. `average_speed` can exceed `max_speed` on very short laps — the two
  *     fields are computed over different windows by the device.
- *  7. Athlete weight lives in `icu_weight`; the Strava-sourced `weight` is null.
- *  8. Non-run activities (Walk / Ride / WeightTraining / Yoga) dominate the
+ *  8. Athlete weight lives in `icu_weight`; the Strava-sourced `weight` is null.
+ *  9. Non-run activities (Walk / Ride / WeightTraining / Yoga) dominate the
  *     activity list by count, and a GPS-glitched dog walk can report a
  *     `max_speed` higher than any real sprint.
+ * 10. The `distance` and `velocity_smooth` streams for the same activity
+ *     disagree: distance deltas imply speeds ~10% above the velocity trace's
+ *     own peak. Deriving distance from the former makes a window's *average*
+ *     speed exceed the fastest instant inside it, which is impossible.
+ * 11. A burst of per-activity requests draws `429` partway through, and the
+ *     limiter is about request volume, not concurrency — 12 in parallel is
+ *     fine, 140 in four seconds is not.
+ * 12. GPS mis-measures short track races in both directions: a 200 m race
+ *     recorded 225 m, while a 400 m race recorded 380 m.
  */
 
 import type { HttpGet, HttpResponse } from '../../src/application/dashboard-sync';
@@ -396,10 +407,13 @@ export const ACTIVITIES_WITH_INTERVALS = Object.keys(INTERVAL_SETS);
 export function buildActivityStreams(activityId: string): unknown[] | null {
   const velocity = VELOCITY_STREAMS[activityId];
   if (!velocity) return null;
+  // The track race carries the live account's stream disagreement: its
+  // `distance` series runs 12% ahead of what its own velocities integrate to.
+  const inflate = activityId === 'act_race_200' ? INFLATED_DISTANCE_FACTOR : 1;
   return [
     { type: 'time', data: velocity.map((_, i) => i) },
     { type: 'velocity_smooth', data: velocity },
-    { type: 'distance', data: cumulativeDistance(velocity) },
+    { type: 'distance', data: cumulativeDistance(velocity).map((d) => parseFloat((d * inflate).toFixed(2))) },
     { type: 'heartrate', data: velocity.map(() => 140) },
   ];
 }
@@ -443,8 +457,64 @@ const FLYS_STREAM: Array<number | null> = [
   ...hold(0, 5),
 ];
 
+/**
+ * A track session whose stream carries the artifact that makes the upstream
+ * pace-curve endpoint unusable.
+ *
+ * Sample 25 reports 102 m/s. Integrated naively that is 100 m covered in one
+ * second — which is exactly what `GET /athlete/{id}/pace-curves` returned for
+ * a live masters account at 45.7 m, 100 m and 150 m. Anything reading this
+ * stream must reject the spike and fall back to the genuine 8 m/s reps either
+ * side of it, or report no data; it must never publish the spike as a best.
+ */
+const GPS_SPIKE_STREAM: Array<number | null> = [
+  ...hold(0, 5),
+  // Warm-up jog
+  ...hold(2.7, 120),
+  ...hold(0, 10),
+  // A genuine 150 m rep at ~8 m/s — the fastest real running in the session.
+  ...[1.6, 3.5, 5.4, 6.9, 7.7, 8.0, 8.1, 8.1, 8.0, 7.9, 7.8, 7.7, 7.6, 7.5, 7.4, 7.3, 7.2, 7.1, 7.0, 6.9],
+  // One spurious GPS fix. A single sample, physically impossible.
+  102,
+  ...hold(0.4, 100),
+  // A second genuine rep, marginally slower.
+  ...[1.5, 3.3, 5.2, 6.7, 7.5, 7.8, 7.9, 7.9, 7.8, 7.7, 7.6, 7.5, 7.4, 7.3, 7.2, 7.1, 7.0, 6.9, 6.8, 6.7],
+  ...hold(2.5, 100),
+  ...hold(0, 5),
+];
+
+/** The impossible sample in {@link GPS_SPIKE_STREAM}, in m/s. */
+export const FIXTURE_GPS_SPIKE_SPEED = 102;
+/** Peak *legitimate* velocity in that session. */
+export const FIXTURE_GPS_SPIKE_STREAM_VMAX = 8.1;
+
+/**
+ * A 200 m rep whose velocity trace peaks at 8.9 m/s.
+ *
+ * Paired with {@link INFLATED_DISTANCE_FACTOR} below, this reproduces the live
+ * account's disagreement between the two streams.
+ */
+const TRACK_200M_STREAM: Array<number | null> = [
+  ...hold(0, 4),
+  ...[1.8, 4.0, 5.9, 7.1, 7.9, 8.4, 8.7, 8.9, 8.9, 8.8, 8.7, 8.6, 8.5, 8.3, 8.1,
+      7.9, 7.7, 7.5, 7.3, 7.1, 6.9, 6.7, 6.5, 6.3, 6.1, 5.9, 5.7, 5.5],
+  ...hold(0, 4),
+];
+
+/**
+ * How much further the `distance` stream claims the athlete travelled than the
+ * velocity trace accounts for. 1.12 is the live figure: a 200 m race recorded
+ * as 225 m.
+ */
+export const INFLATED_DISTANCE_FACTOR = 1.12;
+
+/** Peak of {@link TRACK_200M_STREAM} — no derived average may exceed it. */
+export const FIXTURE_TRACK_200M_PEAK = 8.9;
+
 const VELOCITY_STREAMS: Record<string, Array<number | null>> = {
+  act_race_200: TRACK_200M_STREAM,
   act_run_flys: FLYS_STREAM,
+  act_run_accel: GPS_SPIKE_STREAM,
   act_run_drills: [
     ...hold(0, 5),
     ...hold(2.8, 160),
@@ -497,6 +567,8 @@ export interface IntervalsApiStub {
   lapDataRequests(): string[];
   /** Activity ids whose velocity stream was requested. */
   streamRequests(): string[];
+  /** How many requests the stub refused with a 429. */
+  rateLimitedCount(): number;
 }
 
 export interface StubOverrides {
@@ -510,6 +582,12 @@ export interface StubOverrides {
   events?: unknown;
   /** Force a status code for any request whose path contains the key. */
   failing?: Record<string, number>;
+  /**
+   * Reproduce Intervals.icu's rate limiter: answer `429` to per-activity
+   * requests once `afterRequests` have been served, for the next
+   * `failures` of them. Retried requests succeed, as they do live.
+   */
+  rateLimit?: { afterRequests: number; failures: number };
 }
 
 function jsonResponse(body: unknown): HttpResponse {
@@ -526,7 +604,7 @@ function errorResponse(status: number): HttpResponse {
   return {
     ok: false,
     status,
-    statusText: status === 404 ? 'Not Found' : 'Error',
+    statusText: status === 404 ? 'Not Found' : status === 429 ? 'Too Many Requests' : 'Error',
     json: async () => ({}),
     text: async () => `HTTP ${status}`,
   };
@@ -539,12 +617,24 @@ function errorResponse(status: number): HttpResponse {
 export function createIntervalsApiStub(overrides: StubOverrides = {}): IntervalsApiStub {
   const calls: ApiCall[] = [];
 
+  let served = 0;
+  let refused = 0;
+
   const httpGet: HttpGet = async (url) => {
     const path = url.replace(/^https?:\/\/[^/]+/, '');
     calls.push({ url, path });
 
     for (const [fragment, status] of Object.entries(overrides.failing ?? {})) {
       if (path.includes(fragment)) return errorResponse(status);
+    }
+
+    const limit = overrides.rateLimit;
+    if (limit && /\/activity\/[^/]+\/(intervals|streams)/.test(path)) {
+      served++;
+      if (served > limit.afterRequests && refused < limit.failures) {
+        refused++;
+        return errorResponse(429);
+      }
     }
 
     const activityMatch = path.match(/\/activity\/([^/]+)\/(intervals|streams)/);
@@ -586,5 +676,6 @@ export function createIntervalsApiStub(overrides: StubOverrides = {}): Intervals
     callsMatching: (fragment) => calls.filter((c) => c.path.includes(fragment)),
     lapDataRequests: () => activityRequests('intervals'),
     streamRequests: () => activityRequests('streams'),
+    rateLimitedCount: () => refused,
   };
 }

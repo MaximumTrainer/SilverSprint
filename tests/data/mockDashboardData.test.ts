@@ -8,8 +8,17 @@ import {
   mockTrainingPlan,
   simulateTraining,
   demoReferenceDate,
+  mockPaceCurveStreams,
+  mockPaceCurveDistances,
+  mockBestVmax60d,
 } from '../../src/data/mockDashboardData';
 import { SilverSprintLogic } from '../../src/domain/sprint/core';
+import {
+  DEFAULT_PACE_CURVE_DISTANCES,
+  MAX_PLAUSIBLE_SPEED,
+  computePaceCurve,
+  paceCurveMonotonicityViolations,
+} from '../../src/domain/sprint/pace-curve';
 
 /**
  * The demo dashboard is the first thing an unauthenticated visitor sees, so it
@@ -222,5 +231,48 @@ describe('demo data — independent of when it is generated', () => {
       const status = SilverSprintLogic.getNFIStatus(SilverSprintLogic.calculateNFI(todayVmax, baseline));
       expect(status, `weekday-independent status for ${date}`).toBe('amber');
     }
+  });
+});
+
+describe('demo data — pace curve', () => {
+  const curve = computePaceCurve({
+    streams: mockPaceCurveStreams,
+    distances: mockPaceCurveDistances,
+    bestVmax60d: mockBestVmax60d,
+  });
+
+  it('starts from the default distance ladder', () => {
+    expect(mockPaceCurveDistances).toEqual([...DEFAULT_PACE_CURVE_DISTANCES]);
+  });
+
+  it('has a measured best at every default distance', () => {
+    for (const point of curve.points) {
+      expect(point.timeSeconds, `${point.distance} m`).not.toBeNull();
+      expect(point.activityName).toBeTruthy();
+      expect(point.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+
+  it('shows speeds a masters sprinter could actually run', () => {
+    for (const point of curve.points) {
+      expect(point.speed!).toBeLessThan(MAX_PLAUSIBLE_SPEED);
+      expect(point.speed!).toBeLessThanOrEqual(mockBestVmax60d);
+      expect(point.speed!).toBeGreaterThan(4);
+    }
+  });
+
+  it('is monotonic, and carries no excluded efforts to explain', () => {
+    expect(paceCurveMonotonicityViolations(curve)).toEqual([]);
+    expect(curve.excludedEfforts).toBe(0);
+    expect(curve.excludedActivities).toBe(0);
+  });
+
+  it('is deterministic across loads', () => {
+    const again = computePaceCurve({
+      streams: mockPaceCurveStreams,
+      distances: mockPaceCurveDistances,
+      bestVmax60d: mockBestVmax60d,
+    });
+    expect(again.points).toEqual(curve.points);
   });
 });

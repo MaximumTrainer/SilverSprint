@@ -8,6 +8,8 @@ import { SprintWorkoutGenerator, SprintWorkout, isStaleVmax } from '../domain/sp
 import { RaceEstimate } from '../domain/sprint/race-estimator';
 import { RaceCalibration, RaceResult } from '../domain/sprint/race-results';
 import { RaceResultsPanel } from './RaceResultsPanel';
+import { PaceCurvePanel } from './PaceCurvePanel';
+import type { DistanceEdit, PaceCurveActivityStream } from '../domain/sprint/pace-curve';
 import { StrengthZoneScale } from './StrengthZoneScale';
 import { TwoDayPlanPanel } from './TwoDayPlanPanel';
 import type { TwoDayPlan } from '../domain/sprint/daily-plan';
@@ -53,6 +55,18 @@ interface DashboardProps {
   trainingPlan: TrainingPlanContext | null;
   /** Today's and tomorrow's recommendation. */
   dailyPlan: TwoDayPlan;
+  /** Streams the pace curve is charted from. Re-charting reads only these. */
+  paceCurveStreams: PaceCurveActivityStream[];
+  /** Distances the athlete has chosen for the curve, ascending. */
+  paceCurveDistances: number[];
+  /** The athlete's 60-day peak velocity, for the curve's outlier bound. */
+  bestVmax60d: number;
+  /** How much of the eligible history the curve's streams cover. Omitted in demo mode. */
+  paceCurveCoverage?: { eligible: number; requested: number; fetched: number };
+  /** Toggle a curve distance. Omitted in demo mode. */
+  onTogglePaceCurveDistance?: (distance: number) => DistanceEdit;
+  /** Add a custom curve distance. Omitted in demo mode. */
+  onAddPaceCurveDistance?: (distance: number) => DistanceEdit;
   onLogout: () => void;
   /** When provided, the user is unauthenticated — show demo header instead of user info. */
   onLogin?: () => void;
@@ -222,6 +236,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
   raceEstimates,
   recoveredEstimates,
   dailyPlan,
+  paceCurveStreams,
+  paceCurveDistances,
+  bestVmax60d,
+  paceCurveCoverage,
+  onTogglePaceCurveDistance,
+  onAddPaceCurveDistance,
   raceResults,
   raceCalibration,
   onAddRaceResult,
@@ -988,6 +1008,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
             onRemove={onRemoveRaceResult}
           />
         </div>
+
+        {/* ── Pace Curve ───────────────────────────────────── */}
+        <PaceCurvePanel
+          streams={paceCurveStreams}
+          distances={paceCurveDistances}
+          bestVmax60d={bestVmax60d}
+          coverage={paceCurveCoverage}
+          onToggleDistance={onTogglePaceCurveDistance}
+          onAddDistance={onAddPaceCurveDistance}
+        />
 
         {/* ── 12-Week Training Plan ────────────────────────── */}
         {trainingPlan && (

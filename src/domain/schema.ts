@@ -17,6 +17,11 @@ export const RUN_ACTIVITY_TYPES = [
 export const IntervalsActivitySchema = z.object({
   id: z.string(),
   type: z.enum(RUN_ACTIVITY_TYPES),
+  /**
+   * Session title. Shown against a pace-curve point so a surprising best can
+   * be traced back to the session it came from and, if need be, disbelieved.
+   */
+  name: z.string().nullish(),
   start_date_local: z.string().optional(),
   /**
    * Velocity samples, when the caller has merged a stream onto the activity.

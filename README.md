@@ -128,6 +128,58 @@ survive reloads and browser restarts for exactly as long as your login does.
 Logging out is the only thing that clears them. They never leave the browser —
 entering a result costs no Intervals.icu request.
 
+### Sprint Pace Curve
+
+Your fastest time at every distance you care about — 10 m to 400 m — computed
+from your own 1 Hz GPS traces.
+
+**Intervals.icu's own pace curve cannot be used here.** Measured against a live
+masters account over a year, `GET /athlete/{id}/pace-curves?type=Run` reported
+45.7 m in 1 second, 100 m in 1 second and 200 m in 5 seconds — 40 to 100 m/s.
+Its distance ladder also bottoms out at 45.72 m (50 yards), so 10, 20, 30 and
+60 m are simply absent, and the endpoint takes no distance parameter. Below
+about 250 m every value it returns is a GPS artifact.
+
+So the curve is computed locally instead, with outlier rejection built in:
+
+| Rule | Threshold | Why |
+|---|---|---|
+| Physiological ceiling | 12.5 m/s | The 100 m world record averages 10.44 m/s and peaks near 12.3. Nothing above this is running. |
+| Your own ceiling | 115% of your 60-day peak Vmax | Catches account-specific spikes the absolute limit is too loose for. |
+| GPS dropout | Stream discarded above 10% `null` samples | Distance integrated across gaps is fiction. |
+
+Rejection happens at the **sample** level, not on finished candidates: a bad
+interval cuts the stream in two, so no surviving window can contain an
+impossible stretch. That is what keeps the curve internally consistent — a
+rejected 60 m spike cannot leave the 60 m point slower than a 100 m point that
+swallowed the same artifact. Excluded efforts are counted and shown, so a
+systematically bad device is visible rather than silently smoothed away.
+
+Distances with no qualifying effort read **no data**; the line breaks rather
+than interpolating a time you never ran. Every point names the session and date
+it came from, so a surprising result can be checked and disbelieved.
+
+**These are not race times, and the panel says so.** The clock starts once you
+are already moving, and GPS over-measures distance on a bend. Validated against
+three official masters results on a live account, the curve read **7–13% fast**:
+
+| | Official | Curve |
+|---|---|---|
+| 100 m | 13.60 s | 12.14 s |
+| 200 m | 29.10 s | 24.66 s |
+| 400 m | 65.60 s | 58.75 s |
+
+Use the curve to track change over time; use *Outdoor Track Estimates* to predict
+a race. A distance where you never ran hard is flagged **easy** rather than
+presented as speed — otherwise a warm-up jog becomes "your best 400 m".
+
+**Configuration:** choose from a preset ladder of 10/20/30/40/60/80/100/150/
+200/300/400 m, or add any whole distance from 5 to 400 m — up to 12 at once.
+Selection persists per athlete in `localStorage` and is cleared on logout, the
+same lifecycle as your race times. Changing distances or the date range
+(30/60/90 days or season-to-date) recomputes from streams already in memory and
+issues **no Intervals.icu request at all**.
+
 ### Next 48 Hours — Today and Tomorrow
 
 The dashboard prescribes today *and* tomorrow, so you can see what today's
@@ -275,6 +327,7 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │   ├── AuthGate.tsx       # Login screen with API validation
 │   │   ├── Dashboard.tsx      # Main dashboard UI
 │   │   ├── RaceResultsPanel.tsx    # Enter known race times
+│   │   ├── PaceCurvePanel.tsx      # Sprint pace curve + distance selection
 │   │   ├── StrengthZoneScale.tsx   # Labelled TSB band scale
 │   │   ├── TwoDayPlanPanel.tsx     # Next 48 hours
 │   │   ├── SpringTrainingPanel.tsx  # 7-tab fascia training module
@@ -289,6 +342,7 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │   │   ├── periodization.ts   # TSB-driven strength periodization
 │   │   │   ├── race-estimator.ts  # Multi-factor race time predictions
 │   │   │   ├── race-results.ts    # Known race times + model calibration
+│   │   │   ├── pace-curve.ts      # Mean-maximal sprint curve + outlier rules
 │   │   │   ├── race-plan.ts       # Multi-race training planner
 │   │   │   ├── daily-plan.ts      # Today/tomorrow recommendation
 │   │   │   └── workouts.ts       # NFI-adaptive sprint workout generator
@@ -302,11 +356,16 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │   └── dashboard-sync.ts    # buildDashboardState use case (HttpGet port)
 │   ├── data/
 │   │   └── mockDashboardData.ts # Simulated athlete powering demo mode
+│   ├── lib/
+│   │   ├── race-results-storage.ts  # Per-athlete race times in localStorage
+│   │   └── pace-curve-storage.ts    # Per-athlete curve distances in localStorage
 │   └── hooks/
 │       ├── useIntervalsData.ts  # React adapter over buildDashboardState
-│       └── useRaceResults.ts    # Known race times + per-athlete persistence
+│       ├── useRaceResults.ts    # Known race times + per-athlete persistence
+│       └── usePaceCurveDistances.ts # Charted distances + per-athlete persistence
 ├── tests/                       # Mirrors src/ structure with *.test.ts files
 │   ├── application/             # End-to-end ingestion tests
+│   │   └── analytics-invariants.test.ts  # Relationships every figure must satisfy
 │   └── fixtures/
 │       └── intervals-api.ts     # Mock Intervals.icu API (real response shapes)
 ├── logs/                        # Server log output (dev)
@@ -360,6 +419,10 @@ so no athlete data lives in the repo.
 | `RECOVERY` laps often hold the session's highest `max_speed` | The lap boundary lands inside the preceding sprint. |
 | `average_speed` can exceed `max_speed` on short laps | The two are computed over different windows. Taking `max_speed` alone yields a flying velocity faster than the rep's own peak. |
 | Athlete weight lives in `icu_weight`; Strava `weight` is `null` | Body-weight-derived strength loads come out empty otherwise. |
+| `distance` and `velocity_smooth` disagree by ~10% | For the same activity, the distance stream's per-sample deltas implied 9.4–9.9 m/s where the velocity trace peaked at 8.92. Deriving distance from it made every curve point from 10–60 m average faster than the fastest instant the device recorded. Distance is integrated from `velocity_smooth`, which bounds the average by the peak *by construction*. |
+| Per-activity bursts draw `429` by **volume**, not concurrency | 12 parallel stream requests succeed; 144 in four seconds sees 64 refused. The refusals are silent — they remove sessions from the analysis, and once turned a 400 m best of 61 s into 117 s. Requests are bounded, retried with backoff, and coverage is reported. |
+| GPS mis-measures short track races in both directions | A 200 m race recorded 225 m of GPS distance; a 400 m race recorded 380 m. The first inflates a distance-derived curve, the second makes a completed race vanish from it. |
+| `/pace-curves` is unusable below ~250 m | Its ladder starts at 45.72 m, it takes no distance parameter, and GPS spikes make it report 45.7 m and 100 m in **1 second** and 200 m in 5. The sprint pace curve is computed locally from `velocity_smooth` instead, with an explicit speed ceiling. |
 | Bursts of per-activity requests draw `429` | The events request is issued up front, not after one call per activity, so race planning is not the feature that disappears under the rate limiter. |
 
 ---

@@ -28,6 +28,10 @@ import { RaceEstimator, RaceEstimate, RaceEstimatorInput } from '../domain/sprin
 import { SprintRacePlanner, SprintRacePlan, SprintRaceEvent } from '../domain/sprint/race-plan';
 import { SprintTrainingPlan, TrainingPlanContext } from '../domain/sprint/training-plan';
 import { TwoDayPlan, buildTwoDayPlan, findLastMaxEffort } from '../domain/sprint/daily-plan';
+import {
+  DEFAULT_PACE_CURVE_DISTANCES,
+  PaceCurveActivityStream,
+} from '../domain/sprint/pace-curve';
 
 // ── Athlete profile ─────────────────────────────────────────────────────────
 
@@ -434,3 +438,85 @@ export const mockTrainingPlan: TrainingPlanContext | null = SprintTrainingPlan.b
   nfi,
   tsb,
 );
+
+// ── Pace curve ──────────────────────────────────────────────────────────────
+
+/**
+ * Velocity streams for the demo sessions.
+ *
+ * The demo activities carry a session Vmax but no stream, and the pace curve
+ * is computed from streams alone — so each session's reps are reconstructed
+ * from its Vmax rather than the curve being written out by hand. The demo
+ * therefore exercises the same sliding window, interpolation and outlier
+ * rejection the live app does, and stays in agreement with them when they
+ * change.
+ *
+ * Everything is derived from the session date and Vmax, so the demo curve is
+ * identical on every load.
+ */
+
+/** Rep distances cycled across sessions so the whole ladder gets covered. */
+const DEMO_REP_LADDER = [30, 60, 100, 150, 200, 300, 400];
+
+/**
+ * One rep at 1 Hz: an exponential rise to peak, a few seconds held, then the
+ * gradual decay that makes a 300 m average slower than a 60 m.
+ */
+function buildDemoRep(peak: number, targetDistance: number): number[] {
+  const samples: number[] = [];
+  let covered = 0;
+  for (let t = 0; covered < targetDistance && t < 240; t++) {
+    const rise = 1 - Math.exp(-t / 1.2);
+    const decay = t <= 6 ? 1 : Math.max(0.6, 1 - (t - 6) * 0.013);
+    const v = parseFloat((peak * rise * decay).toFixed(2));
+    samples.push(v);
+    covered += v;
+  }
+  return samples;
+}
+
+/** Repeat a velocity for `seconds` samples — jogs and walk-backs. */
+function demoHold(velocity: number, seconds: number): number[] {
+  return Array.from({ length: seconds }, () => velocity);
+}
+
+export const mockPaceCurveStreams: PaceCurveActivityStream[] = demoActivities
+  .filter((a) => typeof a.max_speed === 'number' && a.max_speed > 0)
+  .slice(0, 24)
+  .map((a, index) => {
+    const peak = a.max_speed as number;
+    const date = (a.start_date_local ?? '').slice(0, 10);
+
+    // Three reps per session, stepping through the ladder so consecutive
+    // sessions cover different distances.
+    const reps = [0, 1, 2].map((offset) => DEMO_REP_LADDER[(index + offset) % DEMO_REP_LADDER.length]);
+
+    const velocitySmooth: number[] = [...demoHold(0, 5), ...demoHold(2.8, 150), ...demoHold(0.4, 20)];
+    for (const distance of reps) {
+      // Longer reps are run below top speed — nobody holds Vmax for 400 m.
+      const repPeak = peak * (distance <= 100 ? 1 : Math.max(0.86, 1 - (distance - 100) * 0.00045));
+      velocitySmooth.push(...buildDemoRep(repPeak, distance), ...demoHold(0.4, 90));
+    }
+    velocitySmooth.push(...demoHold(2.6, 120), ...demoHold(0, 5));
+
+    let covered = 0;
+    const distance = velocitySmooth.map((v) => {
+      covered += v;
+      return parseFloat(covered.toFixed(2));
+    });
+
+    return {
+      activityId: a.id,
+      name: `Track session — ${reps.map((d) => `${d}m`).join(' + ')}`,
+      date,
+      velocitySmooth,
+      distance,
+      time: velocitySmooth.map((_, i) => i),
+    };
+  });
+
+/** The demo athlete has never configured the curve, so it shows the defaults. */
+export const mockPaceCurveDistances: number[] = [...DEFAULT_PACE_CURVE_DISTANCES];
+
+/** The demo athlete's 60-day peak velocity — the curve's outlier bound. */
+export const mockBestVmax60d = raceInput.bestVmax60d;

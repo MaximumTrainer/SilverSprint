@@ -4,6 +4,8 @@ import { Dashboard, AthleteData } from './components/Dashboard';
 import { useIntervalsData } from './hooks/useIntervalsData';
 import { useRaceResults } from './hooks/useRaceResults';
 import { clearRaceResults, clearAllRaceResults } from './lib/race-results-storage';
+import { usePaceCurveDistances } from './hooks/usePaceCurveDistances';
+import { clearPaceCurveDistances, clearAllPaceCurveDistances } from './lib/pace-curve-storage';
 import { NEUTRAL_CALIBRATION } from './domain/sprint/race-results';
 import { SprintWorkout } from './domain/sprint/workouts';
 import { clientLogger } from './logger';
@@ -19,6 +21,9 @@ import {
   mockSprintRacePlans,
   mockTrainingPlan,
   mockDailyPlan,
+  mockPaceCurveStreams,
+  mockPaceCurveDistances,
+  mockBestVmax60d,
 } from './data/mockDashboardData';
 
 const App: React.FC = () => {
@@ -91,10 +96,17 @@ const App: React.FC = () => {
     removeResult: removeRaceResult,
   } = useRaceResults(auth?.athleteId || '');
 
+  // 2a-ii. Charted pace-curve distances — same lifecycle as the race times.
+  const {
+    distances: paceCurveDistances,
+    addDistance: addPaceCurveDistance,
+    toggleDistance: togglePaceCurveDistance,
+  } = usePaceCurveDistances(auth?.athleteId || '');
+
   // 2b. Fetch data using our custom hook
   const {
     intervals, wellness, nfi, nfiStatus, avgVmax, todayVmax,
-    recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, raceCalibration, dailyPlan, loading, error,
+    recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, raceCalibration, dailyPlan, paceCurveStreams, paceCurveCoverage, raceEstimatorInput, loading, error,
   } = useIntervalsData(auth?.athleteId || '', auth?.accessToken || '', auth?.authType || 'basic', raceResults);
 
   const handleOAuthLogin = async () => {
@@ -113,8 +125,10 @@ const App: React.FC = () => {
     // only thing that discards them.
     if (auth?.athleteId) {
       clearRaceResults(auth.athleteId);
+      clearPaceCurveDistances(auth.athleteId);
     } else {
       clearAllRaceResults();
+      clearAllPaceCurveDistances();
     }
     // In dev mode, re-apply .env credentials instead of dropping to an empty auth gate
     const devAthleteId = import.meta.env.INTERVALS_ATHLETE_ID;
@@ -216,6 +230,9 @@ const App: React.FC = () => {
         raceResults={[]}
         raceCalibration={NEUTRAL_CALIBRATION}
         dailyPlan={mockDailyPlan}
+        paceCurveStreams={mockPaceCurveStreams}
+        paceCurveDistances={mockPaceCurveDistances}
+        bestVmax60d={mockBestVmax60d}
         onLogin={handleOAuthLogin}
         onLogout={() => {}}
         onPushWorkout={async () => false}
@@ -296,6 +313,12 @@ const App: React.FC = () => {
       raceResults={raceResults}
       raceCalibration={raceCalibration}
       dailyPlan={dailyPlan}
+      paceCurveStreams={paceCurveStreams}
+      paceCurveDistances={paceCurveDistances}
+      bestVmax60d={raceEstimatorInput.bestVmax60d}
+      paceCurveCoverage={paceCurveCoverage}
+      onTogglePaceCurveDistance={togglePaceCurveDistance}
+      onAddPaceCurveDistance={addPaceCurveDistance}
       onAddRaceResult={addRaceResult}
       onRemoveRaceResult={removeRaceResult}
       onLogout={handleLogout}
