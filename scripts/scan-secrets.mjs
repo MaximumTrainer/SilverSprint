@@ -22,6 +22,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const ALL = process.argv.includes('--all');
@@ -143,14 +144,34 @@ function filesToScan() {
   return out.split('\n').map((f) => f.trim()).filter(Boolean);
 }
 
-/** The content that would actually be committed, not what is on disk. */
+/**
+ * Content to scan.
+ *
+ * In staged mode this must come from the index — the whole point is to see what
+ * would actually be committed, which is not necessarily what is on disk. In
+ * `--all` mode the working tree is the same thing and reading it directly
+ * avoids spawning a `git show` per file, which on Windows turned a full scan
+ * into twelve seconds.
+ */
 function contentOf(file) {
   try {
-    return ALL ? git(['show', `HEAD:${file}`]) : git(['show', `:${file}`]);
+    return ALL ? readFileSync(file, 'utf8') : git(['show', `:${file}`]);
   } catch {
-    return null; // deleted, or unreadable as text
+    return null; // deleted, binary, or unreadable as text
   }
 }
+
+/** Generated or vendored files: enormous, and not where a person pastes a key. */
+const SKIP_CONTENT = [
+  /(^|\/)package-lock\.json$/,
+  /(^|\/)bun\.lockb$/,
+  /(^|\/)yarn\.lock$/,
+  /\.min\.(js|css)$/,
+  /(^|\/)dist\//,
+];
+
+/** Above this, a file is data rather than source; scanning it costs more than it finds. */
+const MAX_SCAN_BYTES = 512 * 1024;
 
 const findings = [];
 
@@ -162,9 +183,11 @@ for (const file of filesToScan()) {
     continue;
   }
   if (EXEMPT_PATHS.includes(posix)) continue;
+  if (SKIP_CONTENT.some((re) => re.test(posix))) continue;
 
   const content = contentOf(file);
   if (content === null) continue;
+  if (content.length > MAX_SCAN_BYTES) continue;
   // Skip anything that looks binary.
   if (content.includes('\u0000')) continue;
 
