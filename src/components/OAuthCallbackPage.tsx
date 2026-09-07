@@ -3,6 +3,7 @@ import { Zap, CheckCircle, AlertCircle } from 'lucide-react';
 import { clientLogger } from '../logger';
 import { handleOAuthCallback, getOAuthRedirectUri } from '../lib/oauth';
 import { persistLogin, AuthCredentials } from '../lib/auth-storage';
+import { routeUrl, takeReturnRoute } from '../lib/routing';
 
 interface OAuthCallbackPageProps {
   onLogin: (credentials: AuthCredentials) => void;
@@ -71,9 +72,12 @@ export const OAuthCallbackPage: React.FC<OAuthCallbackPageProps> = ({ onLogin })
         setState({ status: 'success', athleteId: credentials.athleteId });
         onLoginRef.current(credentials);
 
-        // Navigate to the app root after a brief confirmation delay.
+        // Return to the screen the athlete actually asked for, after a brief
+        // confirmation delay. Someone who deep-linked to /pace-curve while
+        // signed out should land there, not on the dashboard.
+        const destination = routeUrl(takeReturnRoute(), window.location.href);
         setTimeout(() => {
-          window.location.replace(new URL('./', window.location.href).toString());
+          window.location.replace(destination);
         }, 1500);
       } catch (err) {
         const raw = err instanceof Error ? err.message : 'Unknown error during sign-in.';

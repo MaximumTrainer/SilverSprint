@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildDashboardState, DashboardState, LOOKBACK_DAYS } from '../../src/application/dashboard-sync';
+import { PaceCurveSyncResult, loadPaceCurve } from '../../src/application/pace-curve-sync';
 import { SilverSprintLogic } from '../../src/domain/sprint/core';
 import { RUN_ACTIVITY_TYPES } from '../../src/domain/schema';
 import { paceCurveMonotonicityViolations } from '../../src/domain/sprint/pace-curve';
@@ -34,6 +35,28 @@ import {
  */
 
 const RUN_TYPES: readonly string[] = RUN_ACTIVITY_TYPES;
+
+/**
+ * A dashboard sync followed by the pace curve load the screen performs.
+ *
+ * The curve moved to its own screen and its own use case, but the invariants
+ * that tie it to the rest of the dashboard did not move with it: a curve point
+ * still may not exceed the same athlete's 60-day peak, and still has to beat
+ * the race estimate wherever the effort was genuine. Running both halves here
+ * keeps those relationships under test across the split.
+ */
+async function syncWithCurve(overrides = {}): Promise<DashboardState & { paceCurve: PaceCurveSyncResult['curve']; paceCurveStreams: PaceCurveSyncResult['streams'] }> {
+  const api = createIntervalsApiStub(overrides);
+  const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+  const curve = await loadPaceCurve({
+    athleteId: FIXTURE_ATHLETE_ID,
+    httpGet: api.httpGet,
+    activities: state.paceCurveCandidates,
+    bestVmax60d: state.raceEstimatorInput.bestVmax60d,
+    now: FIXTURE_NOW,
+  });
+  return { ...state, paceCurve: curve.curve, paceCurveStreams: curve.streams };
+}
 
 async function sync(overrides = {}): Promise<DashboardState> {
   const api = createIntervalsApiStub(overrides);
@@ -177,7 +200,7 @@ describe('analytics invariants — race estimates', () => {
 
 describe('analytics invariants — the pace curve against everything else', () => {
   it('never reports an average faster than the athlete own 60-day peak', async () => {
-    const state = await sync();
+    const state = await syncWithCurve();
     for (const point of state.paceCurve.points) {
       if (point.speed === null) continue;
       expect(point.speed, `${point.distance} m`).toBeLessThanOrEqual(state.raceEstimatorInput.bestVmax60d);
@@ -185,12 +208,12 @@ describe('analytics invariants — the pace curve against everything else', () =
   });
 
   it('stays monotonic in both time and speed', async () => {
-    const state = await sync();
+    const state = await syncWithCurve();
     expect(paceCurveMonotonicityViolations(state.paceCurve)).toEqual([]);
   });
 
   it('sources every point from a run inside the curve window', async () => {
-    const state = await sync();
+    const state = await syncWithCurve();
     const known = new Set(state.paceCurveStreams.map((s) => s.activityId));
     for (const point of state.paceCurve.points) {
       if (point.activityId === null) continue;
@@ -205,7 +228,7 @@ describe('analytics invariants — the pace curve against everything else', () =
     // the curve ran ~10% fast, so a *genuine* effort must come out ahead of the
     // prediction. Where it does not, the curve has fallen back to steady
     // running — and it must say so rather than passing the jog off as speed.
-    const state = await sync();
+    const state = await syncWithCurve();
     for (const estimate of state.raceEstimates) {
       const point = state.paceCurve.points.find((p) => p.distance === estimate.distance);
       if (!point || point.timeSeconds === null) continue;
@@ -215,7 +238,7 @@ describe('analytics invariants — the pace curve against everything else', () =
   });
 
   it('flags a best that is really a jog, instead of presenting it as speed', async () => {
-    const state = await sync();
+    const state = await syncWithCurve();
     const peak = state.raceEstimatorInput.bestVmax60d;
     for (const point of state.paceCurve.points) {
       if (point.speed === null) continue;
@@ -231,7 +254,7 @@ describe('analytics invariants — the pace curve against everything else', () =
   });
 
   it('accounts for every charted distance, with no silent gaps', async () => {
-    const state = await sync();
+    const state = await syncWithCurve();
     const charted = state.paceCurve.points.map((p) => p.distance);
     expect(new Set(charted).size).toBe(charted.length);
     expect(charted).toEqual([...charted].sort((a, b) => a - b));

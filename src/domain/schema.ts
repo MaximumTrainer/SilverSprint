@@ -41,9 +41,116 @@ export const IntervalsActivitySchema = z.object({
   icu_training_load: z.number().nullable().default(0).transform((v) => v ?? 0),
   icu_atl: z.number().nullable().default(0).transform((v) => v ?? 0), // Fatigue
   icu_ctl: z.number().nullable().default(0).transform((v) => v ?? 0), // Fitness
+  /**
+   * Which sample series the device recorded for this activity, e.g.
+   * `["time","distance","velocity_smooth","heartrate"]`.
+   *
+   * Read as a *positive* signal only. An array that is present and does not
+   * contain `velocity_smooth` means the activity provably has no velocity
+   * trace, so requesting its stream would be a wasted request. `null`, an
+   * absent key, or an empty array all mean **unknown** — on a live account 5
+   * of 118 runs carry `stream_types: null` and do have streams, and `fields=`
+   * turns any null into an absent key (see {@link ACTIVITY_LIST_FIELDS}).
+   * Treating unknown as "no streams" loses those sessions for no saving.
+   */
+  stream_types: z.array(z.string()).nullish(),
 });
 
 export type IntervalsActivity = z.infer<typeof IntervalsActivitySchema>;
+
+/**
+ * The `fields=` list for `GET /athlete/{id}/activities`.
+ *
+ * Derived from the schema rather than hand-written, so a field added to
+ * {@link IntervalsActivitySchema} cannot be silently missing from the request:
+ * an earlier hand-written list omitted `icu_ctl`/`icu_atl` and would have
+ * zeroed the fitness/fatigue charts.
+ *
+ * `velocity_smooth` is excluded deliberately. It is in the schema because the
+ * *stream* response is merged onto an activity downstream; the list endpoint
+ * never returns it, and naming it there would ask for a series that does not
+ * exist on that path.
+ *
+ * Measured on a live account, this takes the season-to-date response from
+ * 2,830,042 bytes to 175,985 — a 93.8% cut. Two consequences of the parameter
+ * matter downstream: Intervals.icu also **omits null values** when `fields=`
+ * is present (so a field the schema expects may be absent rather than `null`),
+ * and `/activities` has **no server-side sport filter**, so this is the only
+ * lever available on that request.
+ */
+export const ACTIVITY_LIST_FIELDS: readonly string[] = Object.keys(IntervalsActivitySchema.shape)
+  .filter((field) => field !== 'velocity_smooth');
+
+/**
+ * One activity from the bulk endpoint
+ * `GET /athlete/{id}/activities/{ids}?intervals=true`.
+ *
+ * Only the two fields that path is used for are described. The response
+ * carries all ~189 activity properties whatever is asked of it — `fields=` is
+ * accepted and ignored there — but the activity list has already supplied
+ * everything else, so the rest is deliberately not re-parsed.
+ *
+ * `icu_intervals` is `nullish`: Intervals.icu returns activities it has not
+ * analysed with no lap data at all, which is "this activity has no intervals",
+ * not a malformed response.
+ */
+export const IntervalsBulkActivitySchema = z.object({
+  id: z.string(),
+  icu_intervals: z.array(z.unknown()).nullish(),
+});
+
+export type IntervalsBulkActivity = z.infer<typeof IntervalsBulkActivitySchema>;
+
+/**
+ * One sample series from `GET /activity/{id}/streams`, as it is cached.
+ *
+ * `null` marks a GPS dropout and is preserved: the pace curve must not
+ * integrate distance across a gap, so the gaps have to survive the round trip.
+ */
+const StreamSamplesSchema = z.array(z.number().finite().nullable());
+
+/**
+ * A cached activity stream.
+ *
+ * Streams of completed activities are immutable, which is what makes caching
+ * them across page loads safe: there is no staleness to reason about, only
+ * capacity. Validated on read because any script on the origin can write to
+ * `localStorage`.
+ *
+ * An **empty** `velocitySmooth` is meaningful, not malformed: it records that
+ * Intervals.icu answered for this activity and it has no velocity trace at
+ * all. That answer cannot change either, so remembering it is what stops a
+ * treadmill session costing a request on every visit.
+ */
+export const CachedActivityStreamSchema = z.object({
+  velocitySmooth: StreamSamplesSchema,
+  distance: StreamSamplesSchema.optional(),
+  time: StreamSamplesSchema.optional(),
+});
+
+export type CachedActivityStream = z.infer<typeof CachedActivityStreamSchema>;
+
+/** One cached activity, keyed by activity id. */
+export const StreamCacheEntrySchema = z.object({
+  id: z.string().min(1),
+  stream: CachedActivityStreamSchema,
+});
+
+export type StreamCacheEntry = z.infer<typeof StreamCacheEntrySchema>;
+
+/**
+ * The stored shape of one athlete's stream cache, newest-used first.
+ *
+ * `entries` is deliberately left unvalidated here so that each one can be
+ * checked on its own: a single corrupt entry must cost one re-fetch, not the
+ * whole cache.
+ */
+export const StreamCacheSchema = z.object({
+  version: z.literal(1),
+  entries: z.array(z.unknown()),
+});
+
+export type StreamCacheRecord = z.infer<typeof StreamCacheSchema>;
 
 export const IntervalsWellnessSchema = z.object({
   id: z.string(),

@@ -131,7 +131,17 @@ entering a result costs no Intervals.icu request.
 ### Sprint Pace Curve
 
 Your fastest time at every distance you care about — 10 m to 400 m — computed
-from your own 1 Hz GPS traces.
+from your own 1 Hz GPS traces. It lives on **its own screen at `/pace-curve`**,
+reached from a link where the panel used to sit; the dashboard links to it and
+it links back, browser history included.
+
+That is not only navigation. The curve needs one velocity stream per session —
+up to 40 requests, the single largest cost in the app — and while it sat at the
+bottom of a 1035-line scroll, **every dashboard load paid for it whether or not
+anyone scrolled that far**. Giving it a screen is what makes the fetch
+deferrable: a dashboard sync now issues **zero** `/streams` requests, opening
+the screen pays for them once, and they are cached from then on. See
+[Request budget](#request-budget).
 
 **Intervals.icu's own pace curve cannot be used here.** Measured against a live
 masters account over a year, `GET /athlete/{id}/pace-curves?type=Run` reported
@@ -170,7 +180,8 @@ three official masters results on a live account, the curve read **7–13% fast*
 | 400 m | 65.60 s | 58.75 s |
 
 Use the curve to track change over time; use *Outdoor Track Estimates* to predict
-a race. A distance where you never ran hard is flagged **easy** rather than
+a race. Calibrating the curve against known race distances is tracked in
+[#33](https://github.com/MaximumTrainer/SilverSprint/issues/33). A distance where you never ran hard is flagged **easy** rather than
 presented as speed — otherwise a warm-up jog becomes "your best 400 m".
 
 **Configuration:** choose from a preset ladder of 10/20/30/40/60/80/100/150/
@@ -179,6 +190,50 @@ Selection persists per athlete in `localStorage` and is cleared on logout, the
 same lifecycle as your race times. Changing distances or the date range
 (30/60/90 days or season-to-date) recomputes from streams already in memory and
 issues **no Intervals.icu request at all**.
+
+**Loading and failure are stated, not implied.** A slow fetch shows a loading
+state, never the empty state — "no sprint efforts found" and "we have not
+finished reading your sessions" look identical on a chart and mean opposite
+things. If Intervals.icu rate-limits the load, the screen says so, shows the
+coverage it did achieve, and offers a retry; the curve it draws is a lower
+bound, and it says that too.
+
+**Everything is metric.** Distances are metres and speeds m/s end to end,
+exactly as the API returns them — the account's `measurement_preference` is
+`meters`, `pace_units` is `MINS_KM`, and `velocity_smooth` is m/s. No unit
+conversion happens anywhere in the ingestion path.
+
+### Request budget
+
+The curve's streams are cached in `localStorage` per athlete, keyed by activity
+id. A completed activity's stream never changes, so a hit is authoritative and
+is never re-fetched and entries never expire on age — the cache is bounded to
+**40 activities** (the same number as the curve's own request cap, so one full
+curve fits exactly), LRU evicted, revalidated with Zod on read, and cleared on
+logout beside your race times. A repeat visit to the curve costs **no
+requests at all**.
+
+The **before** column was measured on a live account with 608 activities
+season-to-date, 118 of them runs and 22 in the 60-day window. The **after**
+column is what the test suite asserts, at `R = 22` and again at `R = 60`, and
+what the two payload measurements below imply.
+
+| | Before (measured) | After |
+|---|---|---|
+| Requests per dashboard load | 80 | **`4 + ceil(R / 25)`** for `R` runs — 5 at `R = 22` |
+| Of which `/streams` | 54 | **0** — deferred to the curve's screen |
+| Of which `/activity/{id}/intervals` | 22, **all in flight at once** | **1 bulk request**, peak 4 in flight |
+| Refused with `429` | 8 | none possible below the 30-per-window limit |
+| `/activities` payload | 2.83 MB | **176 KB** (`fields=`, −93.8%) |
+| Bulk lap payload | 814 KB across 22 requests | 929 KB in one — **+14% bytes to save 21 requests** |
+
+That last row is a deliberate trade, not an oversight: the limiter counts
+requests, not bytes, and the bulk response cannot be slimmed because `fields=`
+is ignored on that path. Five requests sits far under the 30-per-window the
+limiter admits, so a sync is refusal-free by construction rather than by luck.
+The count is exposed on `DashboardState.requestCount` so a regression fails a
+test instead of being discovered at the rate limiter — which is how the last one
+was found, after it had already turned a 400 m best of 61 s into 117 s.
 
 ### Next 48 Hours — Today and Tomorrow
 
@@ -272,11 +327,19 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
    └────────────┘         │  HttpGet port
                ┌──────────▼──────────────────────────────┐
                │          Application Layer               │
+               │  intervals-http.ts                       │
+               │    HttpGet port, concurrency bound,      │
+               │    429 backoff, request counting.        │
                │  dashboard-sync.ts                       │
                │    buildDashboardState() fetches every    │
                │    Intervals.icu resource through the     │
                │    HttpGet port and derives dashboard     │
-               │    state. No React, no fetch: testable.   │
+               │    state. Issues no /streams request.     │
+               │  pace-curve-sync.ts                      │
+               │    loadPaceCurve() — deferred until the   │
+               │    /pace-curve screen is opened; cache    │
+               │    first, network second.                 │
+               │    No React, no fetch: testable.          │
                └──────────┬──────────────────────────────┘
                           │
                ┌──────────▼──────────────────────────────┐
@@ -301,9 +364,10 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
                           │
                ┌──────────▼──────────────────────────────┐
                │         Presentation Layer               │
-               │  App.tsx          Auth + push handlers   │
+               │  App.tsx          Auth, routes, handlers │
                │  AuthGate.tsx     Login UI               │
                │  Dashboard.tsx    Main dashboard         │
+               │  PaceCurveScreen.tsx  /pace-curve        │
                │  SpringTrainingPanel.tsx  Fascia module  │
                │  TimeSeriesChart.tsx  Recharts wrapper   │
                └─────────────────────────────────────────┘
@@ -327,6 +391,7 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │   ├── AuthGate.tsx       # Login screen with API validation
 │   │   ├── Dashboard.tsx      # Main dashboard UI
 │   │   ├── RaceResultsPanel.tsx    # Enter known race times
+│   │   ├── PaceCurveScreen.tsx     # /pace-curve — header, loading, error states
 │   │   ├── PaceCurvePanel.tsx      # Sprint pace curve + distance selection
 │   │   ├── StrengthZoneScale.tsx   # Labelled TSB band scale
 │   │   ├── TwoDayPlanPanel.tsx     # Next 48 hours
@@ -353,14 +418,19 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │       ├── readiness.ts             # Morning check-in assessment
 │   │       └── recovery-modalities.ts   # Tempo, breathing, hydrotherapy
 │   ├── application/
-│   │   └── dashboard-sync.ts    # buildDashboardState use case (HttpGet port)
+│   │   ├── dashboard-sync.ts    # buildDashboardState use case (HttpGet port)
+│   │   ├── pace-curve-sync.ts   # loadPaceCurve — the deferred stream fetch
+│   │   └── intervals-http.ts    # HttpGet port, concurrency, 429 backoff
 │   ├── data/
 │   │   └── mockDashboardData.ts # Simulated athlete powering demo mode
 │   ├── lib/
 │   │   ├── race-results-storage.ts  # Per-athlete race times in localStorage
-│   │   └── pace-curve-storage.ts    # Per-athlete curve distances in localStorage
+│   │   ├── pace-curve-storage.ts    # Per-athlete curve distances in localStorage
+│   │   ├── stream-cache.ts          # Per-athlete velocity streams, LRU bounded
+│   │   └── routing.ts               # Base-relative screen resolution (no router)
 │   └── hooks/
 │       ├── useIntervalsData.ts  # React adapter over buildDashboardState
+│       ├── usePaceCurve.ts      # React adapter over loadPaceCurve (deferred)
 │       ├── useRaceResults.ts    # Known race times + per-athlete persistence
 │       └── usePaceCurveDistances.ts # Charted distances + per-athlete persistence
 ├── tests/                       # Mirrors src/ structure with *.test.ts files
@@ -425,9 +495,16 @@ so no athlete data lives in the repo.
 | `average_speed` can exceed `max_speed` on short laps | The two are computed over different windows. Taking `max_speed` alone yields a flying velocity faster than the rep's own peak. |
 | Athlete weight lives in `icu_weight`; Strava `weight` is `null` | Body-weight-derived strength loads come out empty otherwise. |
 | `distance` and `velocity_smooth` disagree by ~10% | For the same activity, the distance stream's per-sample deltas implied 9.4–9.9 m/s where the velocity trace peaked at 8.92. Deriving distance from it made every curve point from 10–60 m average faster than the fastest instant the device recorded. Distance is integrated from `velocity_smooth`, which bounds the average by the peak *by construction*. |
-| Per-activity bursts draw `429` by **volume**, not concurrency | 12 parallel stream requests succeed; 144 in four seconds sees 64 refused. The refusals are silent — they remove sessions from the analysis, and once turned a 400 m best of 61 s into 117 s. Requests are bounded, retried with backoff, and coverage is reported. |
+| Per-activity bursts draw `429` by **volume**, not concurrency | Re-measured: the limiter admits **exactly 30 requests per short window whatever the concurrency**, and refuses the entire surplus rather than a fraction. 30 concurrent all succeed (306 ms); 40 concurrent gives 30 × 200 + 10 × 429; a second 30 straight after a first gives 30 × 429. It refills in about a second, and a refusal carries `Retry-After: 1` with an empty body. There is **no pre-emptive quota header** — a 200 carries no `X-RateLimit-*` — so the budget has to be self-imposed. The refusals are silent: they remove sessions from the analysis, and once turned a 400 m best of 61 s into 117 s. Requests are bounded, retried with backoff, and coverage is reported. |
+| The bulk endpoint drops ids **and reorders** what it returns | `GET /athlete/{id}/activities/{ids}?intervals=true` documents "missing activities are ignored"; asking for three ids where the middle one was unknown returned two, in a different order. Parsing by position attributes one activity's laps to another. Results are keyed by `id`, and a requested id that does not come back means "no laps", not an error. |
+| `fields=` is accepted and **ignored** on the bulk endpoint | With and without `fields=id,icu_intervals` the response was 928,986 bytes both times, carrying all ~189 properties. The batch size (25 ids) is what bounds the payload; sending `fields=` there is noise. Its lap data *is* byte-identical to the per-activity endpoint, which is what makes the substitution safe. |
+| `fields=` **elides null values entirely** | The parameter does not only select fields — the OpenAPI document says it "also excludes null values", and 5 live runs came back with no `stream_types` and no `max_speed` **key at all**, not with nulls. A schema that tolerates `null` but not an absent key drops those sessions silently. |
+| `stream_types: null` means **unknown**, not "no streams" | 113 of 118 live runs list `velocity_smooth`; 0 have an array without it; 5 have `null` — and those 5 do have streams. Only a **non-empty array that omits** `velocity_smooth` is proof there is nothing to fetch. Treating null, absent or `[]` as "no streams" loses real sessions for a saving of zero requests. |
+| `/activities` has **no server-side sport filter** | `type=Run` is accepted and ignored: the request returns all 608 activities to yield 118 runs. `fields=` is the only lever available on it (2.83 MB → 176 KB). `/activity-pace-curves` and `/pace-curves` *do* honour `type`. |
+| `/activity-pace-curves` **silently substitutes** the distances you ask for | The ladder is published verbatim at `GET /pace_distances` and its floor is 45.719997 m (50 yd). A requested distance is quantised **up** to the nearest rung, reported only in the echoed `distances` array — so 10, 20, 30 and 40 m all collapse onto the *same* rung, with identical `secs`. Six of the app's eleven presets are substituted. Status 200, no warning. |
+| `/activity-pace-curves` returns `secs` **shorter** than `distances` | Of 113 activities, 15 carried fewer `secs` than the 11 distances requested (lengths 4, 7, 8, 9, 10). The array is positionally aligned from index 0 and simply truncated where the activity was too short; `secs.length === distances.length` is not safe to assume. |
 | GPS mis-measures short track races in both directions | A 200 m race recorded 225 m of GPS distance; a 400 m race recorded 380 m. The first inflates a distance-derived curve, the second makes a completed race vanish from it. |
-| `/pace-curves` is unusable below ~250 m | Its ladder starts at 45.72 m, it takes no distance parameter, and GPS spikes make it report 45.7 m and 100 m in **1 second** and 200 m in 5. The sprint pace curve is computed locally from `velocity_smooth` instead, with an explicit speed ceiling. |
+| `/pace-curves` is unusable below ~250 m | Its ladder starts at 45.72 m and GPS spikes make it report 45.7 m and 100 m in **1 second** and 200 m in 5. Filtering its values against a 12.5 m/s ceiling is not enough: over a season with `type=Run`, 20 of 1211 values exceed it, and the *survivors* are still impossible — 11.43 m/s over 45.72 m on an account whose fastest ten metres anywhere averages 9.09 m/s. The sprint pace curve is computed locally from `velocity_smooth` instead, with an explicit speed ceiling. |
 | Bursts of per-activity requests draw `429` | The events request is issued up front, not after one call per activity, so race planning is not the feature that disappears under the rate limiter. |
 
 ---
@@ -569,3 +646,25 @@ npx vercel
 Rewrites:
 - `/api/*` → serverless function (`api/index.ts`)
 - `/*` → SPA fallback (`index.html`)
+
+### Routes
+
+Three screens, path-based, with no router dependency — two screens do not
+justify one. `src/lib/routing.ts` resolves everything **relative to the current
+document** rather than the origin, which is what makes the same build work from
+`/` on Vercel and from `/SilverSprint/` on GitHub Pages (built with
+`--base <repo>/`).
+
+| Path | Screen |
+|---|---|
+| `/` | Dashboard |
+| `/pace-curve` | Sprint pace curve |
+| `/callback` | OAuth code exchange |
+
+Deep links work on both deployments: `vercel.json` rewrites everything to
+`index.html`, and on GitHub Pages `public/404.html` stashes the requested path
+in `sessionStorage.ss_redirect` for the inline script in `index.html` to restore
+with `history.replaceState` before React mounts. Opening `/pace-curve` while
+signed out shows the demo curve; the route is remembered across the OAuth round
+trip, so signing in from there lands back on the curve rather than the
+dashboard.

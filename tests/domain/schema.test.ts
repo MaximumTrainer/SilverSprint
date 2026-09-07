@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsIntervalSchema, RUN_ACTIVITY_TYPES } from '../../src/domain/schema';
+import {
+  ACTIVITY_LIST_FIELDS,
+  CachedActivityStreamSchema,
+  IntervalsActivitySchema,
+  IntervalsBulkActivitySchema,
+  IntervalsIntervalSchema,
+  IntervalsWellnessSchema,
+  RUN_ACTIVITY_TYPES,
+  StreamCacheEntrySchema,
+  StreamCacheSchema,
+} from '../../src/domain/schema';
 
 /**
  * Tests for README §2.2 — Data Ingestion Schema (Zod)
@@ -303,5 +313,145 @@ describe('IntervalsIntervalSchema — icu_training_load', () => {
       training_load: null,
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe('ACTIVITY_LIST_FIELDS — the `fields=` list (AC-9)', () => {
+  it('is every field the schema reads, except the one the endpoint never returns', () => {
+    const schemaFields = Object.keys(IntervalsActivitySchema.shape);
+    expect([...ACTIVITY_LIST_FIELDS].sort())
+      .toEqual(schemaFields.filter((f) => f !== 'velocity_smooth').sort());
+  });
+
+  it('covers the four fields a hand-written list omitted', () => {
+    // The previous draft of the field list named only
+    // id,type,start_date_local,max_speed,stream_types — which would have
+    // silently zeroed the training-load and fitness/fatigue charts.
+    for (const field of ['name', 'icu_training_load', 'icu_atl', 'icu_ctl']) {
+      expect(ACTIVITY_LIST_FIELDS).toContain(field);
+    }
+  });
+
+  it('never asks the list endpoint for velocity_smooth', () => {
+    // It is in the schema because the /streams response is merged onto an
+    // activity downstream; the list endpoint has no such series.
+    expect(ACTIVITY_LIST_FIELDS).not.toContain('velocity_smooth');
+  });
+});
+
+describe('IntervalsActivitySchema — stream_types and `fields=` null elision (AC-10, AC-11)', () => {
+  const base = { id: 'a1', type: 'Run' as const, start_date_local: '2026-09-01T07:00:00' };
+
+  it('accepts the series list the live API returns', () => {
+    const result = IntervalsActivitySchema.safeParse({
+      ...base,
+      stream_types: ['time', 'distance', 'velocity_smooth', 'heartrate'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.stream_types).toContain('velocity_smooth');
+  });
+
+  it('accepts stream_types: null — the shape of a session with no GPS trace', () => {
+    const result = IntervalsActivitySchema.safeParse({ ...base, stream_types: null });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.stream_types).toBeNull();
+  });
+
+  it('accepts the key being absent, which is what `fields=` produces', () => {
+    // Intervals.icu documents that `fields=` "also excludes null values", and
+    // it is observable: 5 live runs came back with neither `stream_types` nor
+    // `max_speed`. A schema that tolerates null but not absence drops them.
+    const result = IntervalsActivitySchema.safeParse(base);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.stream_types).toBeUndefined();
+      expect(result.data.max_speed).toBeNull();
+      // The load fields default rather than failing, so the charts still draw.
+      expect(result.data.icu_ctl).toBe(0);
+      expect(result.data.icu_atl).toBe(0);
+      expect(result.data.icu_training_load).toBe(0);
+    }
+  });
+
+  it('accepts an empty stream_types array without treating it as "no streams"', () => {
+    // The distinction is enforced in `pace-curve-sync`; the schema's job is
+    // only to let the value through intact.
+    const result = IntervalsActivitySchema.safeParse({ ...base, stream_types: [] });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.stream_types).toEqual([]);
+  });
+});
+
+describe('IntervalsBulkActivitySchema — the bulk lap response (FR-16, FR-17)', () => {
+  it('parses an activity with laps', () => {
+    const result = IntervalsBulkActivitySchema.safeParse({
+      id: 'act_track_session',
+      name: 'Track session',
+      icu_intervals: [{ type: 'WORK', distance: 62 }],
+      icu_groups: [],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.icu_intervals).toHaveLength(1);
+  });
+
+  it('parses an activity Intervals.icu has not analysed', () => {
+    for (const laps of [null, undefined]) {
+      const result = IntervalsBulkActivitySchema.safeParse({ id: 'i1', icu_intervals: laps });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it('rejects an entry with no usable id, so it can be skipped rather than misfiled', () => {
+    // The response drops unknown ids and reorders the rest, so the id is the
+    // only thing tying laps to an activity. An entry without one is unusable.
+    expect(IntervalsBulkActivitySchema.safeParse({ id: 42, icu_intervals: [] }).success).toBe(false);
+    expect(IntervalsBulkActivitySchema.safeParse({ icu_intervals: [] }).success).toBe(false);
+  });
+});
+
+describe('CachedActivityStreamSchema — untrusted cache entries (FR-27)', () => {
+  it('round-trips a stream with its GPS dropouts intact', () => {
+    const result = CachedActivityStreamSchema.safeParse({
+      velocitySmooth: [0, 7.6, null, 8.1],
+      distance: [0, 7.6, null, 23.4],
+      time: [0, 1, 2, 3],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.velocitySmooth[2]).toBeNull();
+  });
+
+  it('accepts an empty velocity series as a cached negative', () => {
+    // "Intervals.icu answered, and this activity has no velocity trace."
+    // Streams are immutable, so that answer is as cacheable as a positive.
+    expect(CachedActivityStreamSchema.safeParse({ velocitySmooth: [] }).success).toBe(true);
+  });
+
+  it('rejects a series carrying anything but finite numbers and nulls', () => {
+    for (const bad of ['banana', [{}], ['7.6'], [Number.NaN], [Number.POSITIVE_INFINITY]]) {
+      expect(CachedActivityStreamSchema.safeParse({ velocitySmooth: bad }).success, String(bad)).toBe(false);
+    }
+  });
+});
+
+describe('StreamCacheSchema — the stored envelope', () => {
+  it('accepts the version it writes', () => {
+    expect(StreamCacheSchema.safeParse({ version: 1, entries: [] }).success).toBe(true);
+  });
+
+  it('rejects a record written by a future version', () => {
+    expect(StreamCacheSchema.safeParse({ version: 2, entries: [] }).success).toBe(false);
+  });
+
+  it('leaves entries unvalidated so one bad stream costs one re-fetch', () => {
+    // Validating the array element-wise here would fail the whole cache on a
+    // single corrupt entry. Each is checked on its own by StreamCacheEntrySchema.
+    const record = StreamCacheSchema.safeParse({ version: 1, entries: ['nonsense'] });
+    expect(record.success).toBe(true);
+    expect(StreamCacheEntrySchema.safeParse('nonsense').success).toBe(false);
+    expect(StreamCacheEntrySchema.safeParse({ id: 'a', stream: { velocitySmooth: [1] } }).success).toBe(true);
+  });
+
+  it('rejects an entry with an empty id, which could not be matched to an activity', () => {
+    expect(StreamCacheEntrySchema.safeParse({ id: '', stream: { velocitySmooth: [1] } }).success).toBe(false);
   });
 });

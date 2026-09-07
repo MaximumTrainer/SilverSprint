@@ -1,11 +1,15 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { OAuthCallbackPage } from './components/OAuthCallbackPage';
 import { Dashboard, AthleteData } from './components/Dashboard';
+import { PaceCurveScreen } from './components/PaceCurveScreen';
 import { useIntervalsData } from './hooks/useIntervalsData';
+import { usePaceCurve } from './hooks/usePaceCurve';
 import { useRaceResults } from './hooks/useRaceResults';
 import { clearRaceResults, clearAllRaceResults } from './lib/race-results-storage';
 import { usePaceCurveDistances } from './hooks/usePaceCurveDistances';
 import { clearPaceCurveDistances, clearAllPaceCurveDistances } from './lib/pace-curve-storage';
+import { clearStreamCache, clearAllStreamCaches } from './lib/stream-cache';
+import { AppRoute, rememberReturnRoute, resolveRoute, routeUrl } from './lib/routing';
 import { NEUTRAL_CALIBRATION } from './domain/sprint/race-results';
 import { SprintWorkout } from './domain/sprint/workouts';
 import { clientLogger } from './logger';
@@ -30,11 +34,26 @@ const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthCredentials | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
 
-  // Detect if the current URL is the dedicated OAuth callback path.
-  // Computed once on mount via useMemo — the path never changes without a navigation.
-  const isOAuthCallbackPath = useMemo(() => {
-    const callbackPathname = new URL('./callback', window.location.href).pathname;
-    return window.location.pathname === callbackPathname;
+  // Which screen the URL asks for. Resolved relative to the deployment base by
+  // `lib/routing`, so a deep link works from `/` on Vercel and from
+  // `/SilverSprint/` on GitHub Pages alike. By the time this runs, the inline
+  // script in index.html has already restored the path that `public/404.html`
+  // stashed, so a direct link to /pace-curve resolves to the real path.
+  const [route, setRoute] = useState<AppRoute>(() => resolveRoute(window.location.href));
+  const isOAuthCallbackPath = route === 'callback';
+
+  // Back and forward must move between the screens, not out of the app.
+  useEffect(() => {
+    const onPopState = () => setRoute(resolveRoute(window.location.href));
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  /** Move to another screen without reloading — the sync must not re-run. */
+  const navigate = useCallback((next: AppRoute) => {
+    window.history.pushState(null, '', routeUrl(next, window.location.href));
+    setRoute(next);
+    window.scrollTo(0, 0);
   }, []);
 
   // 1. Check for existing session on mount (dev env vars take priority)
@@ -106,11 +125,31 @@ const App: React.FC = () => {
   // 2b. Fetch data using our custom hook
   const {
     nfi, nfiStatus, avgVmax, todayVmax,
-    recoveryHours, tsb, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, raceCalibration, dailyPlan, paceCurveStreams, paceCurveCoverage, raceEstimatorInput, loading, error,
+    recoveryHours, tsb, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, raceCalibration, dailyPlan, paceCurveCandidates, paceCurveEligible, raceEstimatorInput, loading, error,
   } = useIntervalsData(auth?.athleteId || '', auth?.accessToken || '', auth?.authType || 'basic', raceResults);
+
+  // 2c. The pace curve's streams — the one fetch this app defers.
+  //
+  // Nothing is requested until the athlete opens the pace curve screen, which
+  // is what takes a dashboard load from 54 `/streams` requests to none. The
+  // state lives here rather than in the screen so that moving back to the
+  // dashboard and returning does not re-fetch.
+  const paceCurve = usePaceCurve(
+    auth?.athleteId || '',
+    auth?.accessToken || '',
+    auth?.authType || 'basic',
+    paceCurveCandidates,
+    paceCurveEligible,
+    raceEstimatorInput.bestVmax60d,
+    route === 'pace-curve',
+  );
 
   const handleOAuthLogin = async () => {
     try {
+      // Signing in leaves the app entirely, so the screen the athlete asked
+      // for has to survive outside the URL — otherwise a deep link to the pace
+      // curve while signed out always lands on the dashboard.
+      rememberReturnRoute(route);
       await initiateOAuthFlow(getOAuthRedirectUri());
       // Browser will redirect — execution stops here.
     } catch (err) {
@@ -126,9 +165,11 @@ const App: React.FC = () => {
     if (auth?.athleteId) {
       clearRaceResults(auth.athleteId);
       clearPaceCurveDistances(auth.athleteId);
+      clearStreamCache(auth.athleteId);
     } else {
       clearAllRaceResults();
       clearAllPaceCurveDistances();
+      clearAllStreamCaches();
     }
     // In dev mode, re-apply .env credentials instead of dropping to an empty auth gate
     const devAthleteId = import.meta.env.INTERVALS_ATHLETE_ID;
@@ -217,8 +258,24 @@ const App: React.FC = () => {
     return <OAuthCallbackPage onLogin={(creds) => setAuth(creds)} />;
   }
 
-  // 4. Render demo dashboard with mock data when not authenticated
+  // 4. Render the demo experience with mock data when not authenticated.
+  //
+  // The pace curve screen is reachable here too: a deep link to /pace-curve
+  // while signed out shows the simulated curve read-only, and signing in from
+  // it comes back to this screen rather than to the dashboard.
   if (!auth) {
+    if (route === 'pace-curve') {
+      return (
+        <PaceCurveScreen
+          streams={mockPaceCurveStreams}
+          distances={mockPaceCurveDistances}
+          bestVmax60d={mockBestVmax60d}
+          status="ready"
+          onBack={() => navigate('dashboard')}
+          onLogin={handleOAuthLogin}
+        />
+      );
+    }
     return (
       <Dashboard
         athleteData={mockAthleteData}
@@ -230,9 +287,7 @@ const App: React.FC = () => {
         raceResults={[]}
         raceCalibration={NEUTRAL_CALIBRATION}
         dailyPlan={mockDailyPlan}
-        paceCurveStreams={mockPaceCurveStreams}
-        paceCurveDistances={mockPaceCurveDistances}
-        bestVmax60d={mockBestVmax60d}
+        onOpenPaceCurve={() => navigate('pace-curve')}
         onLogin={handleOAuthLogin}
         onLogout={() => {}}
         onPushWorkout={async () => false}
@@ -302,6 +357,24 @@ const App: React.FC = () => {
     bodyWeightKg,
   };
 
+  if (route === 'pace-curve') {
+    return (
+      <PaceCurveScreen
+        streams={paceCurve.streams}
+        distances={paceCurveDistances}
+        bestVmax60d={raceEstimatorInput.bestVmax60d}
+        coverage={paceCurve.coverage}
+        status={paceCurve.status === 'idle' ? 'loading' : paceCurve.status}
+        errorMessage={paceCurve.errorMessage}
+        rateLimited={paceCurve.rateLimited}
+        onRetry={paceCurve.retry}
+        onBack={() => navigate('dashboard')}
+        onToggleDistance={togglePaceCurveDistance}
+        onAddDistance={addPaceCurveDistance}
+      />
+    );
+  }
+
   return (
     <Dashboard
       athleteData={athleteData}
@@ -313,12 +386,7 @@ const App: React.FC = () => {
       raceResults={raceResults}
       raceCalibration={raceCalibration}
       dailyPlan={dailyPlan}
-      paceCurveStreams={paceCurveStreams}
-      paceCurveDistances={paceCurveDistances}
-      bestVmax60d={raceEstimatorInput.bestVmax60d}
-      paceCurveCoverage={paceCurveCoverage}
-      onTogglePaceCurveDistance={togglePaceCurveDistance}
-      onAddPaceCurveDistance={addPaceCurveDistance}
+      onOpenPaceCurve={() => navigate('pace-curve')}
       onAddRaceResult={addRaceResult}
       onRemoveRaceResult={removeRaceResult}
       onLogout={handleLogout}

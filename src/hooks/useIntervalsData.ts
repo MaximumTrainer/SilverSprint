@@ -42,9 +42,9 @@ const INITIAL_STATE: IntervalsDataState = {
     trainingIntervals: [],
   },
   raceCalibration: NEUTRAL_CALIBRATION,
-  paceCurveStreams: [],
-  paceCurve: { points: [], excludedEfforts: 0, excludedActivities: 0, activitiesUsed: 0 },
-  paceCurveCoverage: { eligible: 0, requested: 0, fetched: 0 },
+  paceCurveCandidates: [],
+  paceCurveEligible: 0,
+  requestCount: 0,
   // A neutral placeholder so the dashboard can render before the first sync
   // resolves; replaced wholesale by the real plan on load.
   dailyPlan: buildTwoDayPlan({

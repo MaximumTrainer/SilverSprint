@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Zap, Activity, Dumbbell, User, LogOut, Send, Clock, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Info, Timer, Flag, Calendar, Trophy,
+  Zap, Activity, Dumbbell, User, LogOut, Send, Clock, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Info, Timer, Flag, Calendar, Trophy, ChevronRight,
 } from 'lucide-react';
 import { NFIStatus, STRENGTH_ZONE_BANDS, getStrengthZoneBand } from '../domain/sprint/core';
 import { StrengthPeriodization } from '../domain/sprint/periodization';
@@ -8,8 +8,6 @@ import { SprintWorkoutGenerator, SprintWorkout, isStaleVmax } from '../domain/sp
 import { RaceEstimate } from '../domain/sprint/race-estimator';
 import { RaceCalibration, RaceResult } from '../domain/sprint/race-results';
 import { RaceResultsPanel } from './RaceResultsPanel';
-import { PaceCurvePanel } from './PaceCurvePanel';
-import type { DistanceEdit, PaceCurveActivityStream } from '../domain/sprint/pace-curve';
 import { StrengthZoneScale } from './StrengthZoneScale';
 import { TwoDayPlanPanel } from './TwoDayPlanPanel';
 import type { TwoDayPlan } from '../domain/sprint/daily-plan';
@@ -55,18 +53,16 @@ interface DashboardProps {
   trainingPlan: TrainingPlanContext | null;
   /** Today's and tomorrow's recommendation. */
   dailyPlan: TwoDayPlan;
-  /** Streams the pace curve is charted from. Re-charting reads only these. */
-  paceCurveStreams: PaceCurveActivityStream[];
-  /** Distances the athlete has chosen for the curve, ascending. */
-  paceCurveDistances: number[];
-  /** The athlete's 60-day peak velocity, for the curve's outlier bound. */
-  bestVmax60d: number;
-  /** How much of the eligible history the curve's streams cover. Omitted in demo mode. */
-  paceCurveCoverage?: { eligible: number; requested: number; fetched: number };
-  /** Toggle a curve distance. Omitted in demo mode. */
-  onTogglePaceCurveDistance?: (distance: number) => DistanceEdit;
-  /** Add a custom curve distance. Omitted in demo mode. */
-  onAddPaceCurveDistance?: (distance: number) => DistanceEdit;
+  /**
+   * Open the sprint pace curve screen.
+   *
+   * The curve used to be rendered inline here. It is a link now because the
+   * streams behind it are the app's single largest request cost — up to 40 of
+   * them — and a panel at the bottom of a 1035-line scroll was charging every
+   * dashboard load for something most visits never reached. A preview would
+   * reinstate exactly that cost, so there is deliberately not one.
+   */
+  onOpenPaceCurve: () => void;
   onLogout: () => void;
   /** When provided, the user is unauthenticated — show demo header instead of user info. */
   onLogin?: () => void;
@@ -236,12 +232,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   raceEstimates,
   recoveredEstimates,
   dailyPlan,
-  paceCurveStreams,
-  paceCurveDistances,
-  bestVmax60d,
-  paceCurveCoverage,
-  onTogglePaceCurveDistance,
-  onAddPaceCurveDistance,
+  onOpenPaceCurve,
   raceResults,
   raceCalibration,
   onAddRaceResult,
@@ -1010,14 +1001,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* ── Pace Curve ───────────────────────────────────── */}
-        <PaceCurvePanel
-          streams={paceCurveStreams}
-          distances={paceCurveDistances}
-          bestVmax60d={bestVmax60d}
-          coverage={paceCurveCoverage}
-          onToggleDistance={onTogglePaceCurveDistance}
-          onAddDistance={onAddPaceCurveDistance}
-        />
+        <button
+          type="button"
+          onClick={onOpenPaceCurve}
+          className="icu-card"
+          style={{
+            marginTop: 12,
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            textAlign: 'left',
+            cursor: 'pointer',
+            color: 'var(--icu-text)',
+          }}
+        >
+          <Activity size={16} style={{ color: 'var(--icu-primary)', flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="icu-section-title" style={{ marginBottom: 2 }}>Sprint Pace Curve</div>
+            <div style={{ fontSize: 10, color: 'var(--icu-text-disabled)', lineHeight: 1.5 }}>
+              Your fastest rolling effort at every distance from 10 m to 400 m,
+              computed from your own GPS traces. Opened on demand — the velocity
+              streams it needs are the most expensive thing this app fetches.
+            </div>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--icu-text-disabled)', flexShrink: 0 }} />
+        </button>
 
         {/* ── 12-Week Training Plan ────────────────────────── */}
         {trainingPlan && (

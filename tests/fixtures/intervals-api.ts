@@ -37,6 +37,14 @@
  *     fine, 140 in four seconds is not.
  * 12. GPS mis-measures short track races in both directions: a 200 m race
  *     recorded 225 m, while a 400 m race recorded 380 m.
+ * 13. The bulk endpoint `/athlete/{id}/activities/{ids}?intervals=true` drops
+ *     ids it does not recognise **and reorders the ones it returns**. Parsing
+ *     by position attributes one activity's laps to another.
+ * 14. `stream_types` is `null` on activities with no GPS trace, and `fields=`
+ *     turns any null into an **absent key**. Neither means "no streams"; only
+ *     a non-empty array that omits `velocity_smooth` does.
+ * 15. `fields=` elides nulls entirely, so a schema that tolerates `null` must
+ *     also tolerate the key not being there at all.
  */
 
 import type { HttpGet, HttpResponse } from '../../src/application/dashboard-sync';
@@ -145,6 +153,18 @@ const ACTIVITY_CATALOGUE: FixtureActivity[] = [
   { id: 'act_run_intervals',type: 'Run',            name: 'Easy intervals',                        daysAgo: 58, distance: 3103, moving_time: 1400, max_speed: 6.29,  icu_training_load: 19, icu_atl: 22.9, icu_ctl: 29.2 },
 ];
 
+/**
+ * The `stream_types` a GPS-recorded session carries.
+ *
+ * The live API lists every series the device wrote, `velocity_smooth` among
+ * them. An activity with no GPS trace carries `stream_types: null` instead —
+ * and on the live account those are exactly the activities whose `max_speed`
+ * is also null.
+ */
+export const GPS_STREAM_TYPES = [
+  'time', 'distance', 'velocity_smooth', 'heartrate', 'latlng', 'altitude',
+] as const;
+
 /** `GET /api/v1/athlete/{id}/activities` — newest-first, exactly like the live API. */
 export function buildActivityList(): Record<string, unknown>[] {
   return ACTIVITY_CATALOGUE.map((a) => ({
@@ -160,6 +180,87 @@ export function buildActivityList(): Record<string, unknown>[] {
     icu_training_load: a.icu_training_load,
     icu_atl: a.icu_atl,
     icu_ctl: a.icu_ctl,
+    // No GPS trace means no series list at all, not an empty one.
+    stream_types: a.max_speed === null ? null : [...GPS_STREAM_TYPES],
+  }));
+}
+
+/**
+ * The same list as Intervals.icu returns it **with `fields=` applied**.
+ *
+ * The parameter does not only select fields: it "also excludes null values",
+ * so a key whose value is null is absent altogether. Observed live on the 5
+ * runs whose `stream_types` and `max_speed` are both null — they came back
+ * with neither key. A schema that tolerates `null` but not an absent key
+ * silently drops those sessions.
+ */
+export function buildFieldsElidedActivityList(): Record<string, unknown>[] {
+  return buildActivityList().map((activity) => {
+    const kept: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(activity)) {
+      if (value !== null) kept[key] = value;
+    }
+    return kept;
+  });
+}
+
+/**
+ * Activities covering all four `stream_types` states, for the skip rule.
+ *
+ * Only the third of these may be skipped: an array that is present, non-empty
+ * and does not list `velocity_smooth` is the one case where Intervals.icu has
+ * actually told us there is no velocity trace to fetch.
+ */
+export function buildStreamTypesScenario(): Record<string, unknown>[] {
+  const base = {
+    type: 'Run',
+    distance: 3000,
+    moving_time: 900,
+    icu_training_load: 20,
+    icu_atl: 30,
+    icu_ctl: 32,
+  };
+  return [
+    { ...base, id: 'st_listed',   name: 'Listed velocity_smooth', start_date_local: localTimestamp(1), max_speed: 8.5, stream_types: [...GPS_STREAM_TYPES] },
+    { ...base, id: 'st_null',     name: 'Null stream_types',      start_date_local: localTimestamp(2), max_speed: 8.4, stream_types: null },
+    { ...base, id: 'st_no_vel',   name: 'Treadmill, no velocity', start_date_local: localTimestamp(3), max_speed: 8.3, stream_types: ['time', 'distance', 'heartrate'] },
+    { ...base, id: 'st_empty',    name: 'Empty stream_types',     start_date_local: localTimestamp(4), max_speed: 8.2, stream_types: [] },
+    // `fields=` elision: the key is simply not there.
+    { ...base, id: 'st_absent',   name: 'No stream_types key',    start_date_local: localTimestamp(5), max_speed: 8.1 },
+  ];
+}
+
+/** The one activity in {@link buildStreamTypesScenario} whose stream must not be requested. */
+export const STREAM_TYPES_SKIPPED_ID = 'st_no_vel';
+
+/**
+ * A season's worth of runs, for the assertions the 17-run catalogue cannot make.
+ *
+ * A cap of 40 and a batch size of 25 are invisible to a fixture with 17 runs
+ * in it — which is exactly why a live account leaked 6 requests past the cap
+ * without any test noticing.
+ *
+ * @param runs how many run activities to generate, newest first
+ * @param withIntervals how many of them have lap data; the rest have none, so
+ *   they exercise the path that used to fall back to a `/streams` request
+ */
+export function buildLargeRunAccount(runs: number, withIntervals = 0): Record<string, unknown>[] {
+  return Array.from({ length: runs }, (_, i) => ({
+    // The stub reads the id: `_lap_` marks an activity that has lap data.
+    id: `bulk_run_${i < withIntervals ? 'lap' : 'nolap'}_${String(i).padStart(3, '0')}`,
+    type: 'Run',
+    name: `Session ${i}`,
+    // Two sessions a day keeps 80 runs inside the 60-day dashboard window.
+    start_date_local: localTimestamp(Math.floor(i / 2), i % 2 === 0 ? '07:00:00' : '17:30:00'),
+    distance: 4000,
+    moving_time: 1200,
+    // Descending, so the ranking the cap depends on is unambiguous.
+    max_speed: 9 - i * 0.01,
+    average_speed: 3.3,
+    icu_training_load: 20,
+    icu_atl: 30,
+    icu_ctl: 32,
+    stream_types: [...GPS_STREAM_TYPES],
   }));
 }
 
@@ -326,10 +427,22 @@ export function withProjectedFutureRows(wellness: Record<string, unknown>[]): Re
  * `average_speed > max_speed`.
  */
 export function buildActivityIntervals(activityId: string): Record<string, unknown> | null {
+  // Generated season-length accounts mark lap data in the id itself.
+  if (activityId.includes('_lap_')) {
+    return { id: activityId, analyzed: true, icu_intervals: GENERIC_SPRINT_LAPS, icu_groups: [] };
+  }
   const icu_intervals = INTERVAL_SETS[activityId];
   if (!icu_intervals) return null;
   return { id: activityId, analyzed: true, icu_intervals, icu_groups: [] };
 }
+
+/** A plain 2x60 m session, for the generated activities of a season-length account. */
+const GENERIC_SPRINT_LAPS: Record<string, unknown>[] = [
+  { label: null, type: 'WORK',     distance: 1000.0, moving_time: 350, elapsed_time: 350, average_speed: 2.857, max_speed: 3.30, training_load: 6.10 },
+  { label: null, type: 'WORK',     distance: 62.0,   moving_time: 8,   elapsed_time: 8,   average_speed: 7.750, max_speed: 8.10, training_load: 0.41 },
+  { label: null, type: 'RECOVERY', distance: 105.0,  moving_time: 120, elapsed_time: 120, average_speed: 0.875, max_speed: 8.20, training_load: 0.54 },
+  { label: null, type: 'WORK',     distance: 61.0,   moving_time: 8,   elapsed_time: 8,   average_speed: 7.625, max_speed: 8.05, training_load: 0.40 },
+];
 
 const INTERVAL_SETS: Record<string, Record<string, unknown>[]> = {
   // A sprint primer: jog warm-up (mis-typed WORK), 3x30m accels, 2x60m flys.
@@ -567,8 +680,21 @@ export interface IntervalsApiStub {
   lapDataRequests(): string[];
   /** Activity ids whose velocity stream was requested. */
   streamRequests(): string[];
+  /** Distinct activity ids whose velocity stream was requested — a 429 retry counts once. */
+  distinctStreamRequests(): string[];
+  /** Each bulk interval request, as the list of ids it asked for. */
+  bulkIntervalRequests(): string[][];
   /** How many requests the stub refused with a 429. */
   rateLimitedCount(): number;
+  /**
+   * The most requests that were ever in flight at the same moment.
+   *
+   * Counting calls cannot tell 22 sequential requests from 22 simultaneous
+   * ones, and it was the simultaneity that drew the limiter: on a live account
+   * an unbounded `Promise.allSettled` put all 22 `/intervals` requests in the
+   * air at once.
+   */
+  peakInFlight(): number;
 }
 
 export interface StubOverrides {
@@ -588,6 +714,21 @@ export interface StubOverrides {
    * `failures` of them. Retried requests succeed, as they do live.
    */
   rateLimit?: { afterRequests: number; failures: number };
+  /**
+   * Break the bulk interval endpoint, to exercise the per-activity fallback.
+   *
+   * `'error'` answers HTTP 500; `'no-intervals'` answers 200 with a body that
+   * carries no `icu_intervals` at all — the shape-change case, which is
+   * indistinguishable from "this batch told us nothing" and so must not be
+   * read as "these activities have no laps".
+   */
+  bulkIntervals?: 'error' | 'no-intervals';
+  /**
+   * Answer the bulk endpoint in request order instead of reordering it.
+   *
+   * The live endpoint reorders; this exists only to prove a test would notice.
+   */
+  bulkPreservesOrder?: boolean;
 }
 
 function jsonResponse(body: unknown): HttpResponse {
@@ -616,11 +757,21 @@ function errorResponse(status: number): HttpResponse {
  */
 export function createIntervalsApiStub(overrides: StubOverrides = {}): IntervalsApiStub {
   const calls: ApiCall[] = [];
+  const bulkBatches: string[][] = [];
 
   let served = 0;
   let refused = 0;
+  let inFlight = 0;
+  let peak = 0;
 
-  const httpGet: HttpGet = async (url) => {
+  /** Ids this account knows about, so the bulk endpoint can drop the rest. */
+  const knownIds = new Set(
+    (Array.isArray(overrides.activities) ? overrides.activities : buildActivityList())
+      .map((a) => (a as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === 'string'),
+  );
+
+  const respond: HttpGet = async (url) => {
     const path = url.replace(/^https?:\/\/[^/]+/, '');
     calls.push({ url, path });
 
@@ -629,12 +780,27 @@ export function createIntervalsApiStub(overrides: StubOverrides = {}): Intervals
     }
 
     const limit = overrides.rateLimit;
-    if (limit && /\/activity\/[^/]+\/(intervals|streams)/.test(path)) {
+    if (limit && /(\/activity\/[^/]+\/(intervals|streams)|activities\/[^?]+\?intervals=true)/.test(path)) {
       served++;
       if (served > limit.afterRequests && refused < limit.failures) {
         refused++;
         return errorResponse(429);
       }
+    }
+
+    // Bulk laps: /athlete/{id}/activities/{id1,id2,...}?intervals=true
+    const bulkMatch = path.match(/\/athlete\/[^/]+\/activities\/([^/?]+)/);
+    if (bulkMatch) {
+      const requested = decodeURIComponent(bulkMatch[1]).split(',');
+      bulkBatches.push(requested);
+      if (overrides.bulkIntervals === 'error') return errorResponse(500);
+      if (overrides.bulkIntervals === 'no-intervals') {
+        return jsonResponse(requested.map((id) => ({ id, name: 'no laps here' })));
+      }
+      // The live endpoint drops ids it does not recognise and returns what is
+      // left in an order of its own choosing.
+      const returned = requested.filter((id) => knownIds.has(id)).map(bulkActivityWithIntervals);
+      return jsonResponse(overrides.bulkPreservesOrder ? returned : returned.reverse());
     }
 
     const activityMatch = path.match(/\/activity\/([^/]+)\/(intervals|streams)/);
@@ -664,6 +830,26 @@ export function createIntervalsApiStub(overrides: StubOverrides = {}): Intervals
     return errorResponse(404);
   };
 
+  /**
+   * Record how many requests overlap.
+   *
+   * The await boundary matters: the counter is decremented only after the
+   * handler resolves, so a caller that fires N requests without awaiting them
+   * shows up as N in flight rather than as N calls.
+   */
+  const httpGet: HttpGet = async (url) => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    try {
+      // Yield once so overlapping callers are genuinely concurrent, the way a
+      // network round trip makes them.
+      await Promise.resolve();
+      return await respond(url);
+    } finally {
+      inFlight--;
+    }
+  };
+
   const activityRequests = (resource: 'intervals' | 'streams'): string[] =>
     calls
       .map((c) => /\/activity\/([^/?]+)\/(intervals|streams)/.exec(c.path))
@@ -676,6 +862,30 @@ export function createIntervalsApiStub(overrides: StubOverrides = {}): Intervals
     callsMatching: (fragment) => calls.filter((c) => c.path.includes(fragment)),
     lapDataRequests: () => activityRequests('intervals'),
     streamRequests: () => activityRequests('streams'),
+    distinctStreamRequests: () => [...new Set(activityRequests('streams'))],
+    bulkIntervalRequests: () => bulkBatches,
     rateLimitedCount: () => refused,
+    peakInFlight: () => peak,
+  };
+}
+
+/**
+ * One activity as the bulk endpoint returns it.
+ *
+ * The lap payload is byte-identical to `/activity/{id}/intervals` — verified
+ * live, deep-equal across 25 intervals — which is what makes the substitution
+ * safe. Ids the fixture has no lap data for come back with an empty array,
+ * not a missing key: "analysed, nothing to report".
+ */
+function bulkActivityWithIntervals(activityId: string): Record<string, unknown> {
+  const laps = buildActivityIntervals(activityId);
+  return {
+    id: activityId,
+    // The response carries every activity property whatever `fields=` asks
+    // for; a couple stand in for the ~189 the live one has.
+    name: `Activity ${activityId}`,
+    type: 'Run',
+    icu_intervals: laps ? laps.icu_intervals : [],
+    icu_groups: [],
   };
 }

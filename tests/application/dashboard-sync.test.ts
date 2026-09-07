@@ -2,12 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildDashboardState, DashboardState } from '../../src/application/dashboard-sync';
 import { RaceEstimator } from '../../src/domain/sprint/race-estimator';
 import { RaceResult, parseRaceResults } from '../../src/domain/sprint/race-results';
-import {
-  DEFAULT_PACE_CURVE_DISTANCES,
-  MAX_PLAUSIBLE_SPEED,
-  computePaceCurve,
-  paceCurveMonotonicityViolations,
-} from '../../src/domain/sprint/pace-curve';
+import { ACTIVITY_LIST_FIELDS, IntervalsActivitySchema } from '../../src/domain/schema';
 import {
   createIntervalsApiStub,
   buildActivityList,
@@ -30,10 +25,15 @@ import {
   withProjectedFutureRows,
   PROJECTED_TOMORROW,
   FIXTURE_TODAY,
-  FIXTURE_GPS_SPIKE_SPEED,
-  FIXTURE_TRACK_200M_PEAK,
+  buildActivityStreams,
+  buildFieldsElidedActivityList,
+  buildLargeRunAccount,
 } from '../fixtures/intervals-api';
-import { PACE_CURVE_MAX_STREAM_ACTIVITIES } from '../../src/application/dashboard-sync';
+import {
+  BULK_INTERVALS_BATCH_SIZE,
+  PACE_CURVE_MAX_STREAM_ACTIVITIES,
+} from '../../src/application/dashboard-sync';
+import { extractStream, toNullableNumbers } from '../../src/application/intervals-http';
 
 /**
  * End-to-end tests for the Intervals.icu ingestion use case, driven by mock
@@ -173,34 +173,59 @@ describe('buildDashboardState — wellness ordering', () => {
 });
 
 describe('buildDashboardState — velocity stream fallback', () => {
-  it('parses sprint reps from a /streams response for sessions with no lap data', async () => {
-    // The live /streams endpoint answers with a bare array of { type, data }
-    // objects. act_run_flys has no /intervals data, so the stream is the only
-    // source of rep-level detail for that session.
-    const state = await sync();
-    const streamVmaxes = state.intervals.map((i) => i.vMax);
-    expect(streamVmaxes).toContain(FIXTURE_FLYS_STREAM_VMAX);
-  });
+  /**
+   * The sync no longer fetches a stream for anything (AC-1). A session with no
+   * lap data still yields rep-level detail, but only from a stream the pace
+   * curve screen has already cached — a miss costs that session's reps on this
+   * load, never a request.
+   */
 
-  it('requests each run activity streams exactly once, and reuses them', async () => {
-    // The pace curve needs the raw stream of every run, so streams are no
-    // longer fetched only as a lap-data fallback. What must not happen is a
-    // *second* request for the same activity: the one response feeds both the
-    // curve and the fallback parser.
+  /** The cache port, populated from the fixture's own stream payloads. */
+  function cachedStreams(...activityIds: string[]) {
+    const byId = new Map(activityIds.map((id) => {
+      const raw = buildActivityStreams(id);
+      return [id, raw && {
+        velocitySmooth: toNullableNumbers(extractStream(raw, 'velocity_smooth')),
+        distance: toNullableNumbers(extractStream(raw, 'distance')),
+        time: toNullableNumbers(extractStream(raw, 'time')),
+      }] as const;
+    }));
+    return (id: string) => byId.get(id) ?? null;
+  }
+
+  it('parses sprint reps from a cached stream for sessions with no lap data', async () => {
+    // act_run_flys has no /intervals data, so a velocity trace is the only
+    // source of rep-level detail for that session.
     const api = createIntervalsApiStub();
-    await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
-    const requested = api.streamRequests();
-    expect(requested).toContain('act_run_flys');
-    expect(requested).toContain('act_run_primer');
-    expect(new Set(requested).size).toBe(requested.length);
+    const state = await buildDashboardState({
+      athleteId: FIXTURE_ATHLETE_ID,
+      httpGet: api.httpGet,
+      now: FIXTURE_NOW,
+      cachedStreams: cachedStreams('act_run_flys'),
+    });
+    expect(state.intervals.map((i) => i.vMax)).toContain(FIXTURE_FLYS_STREAM_VMAX);
+    // …and reading the cache cost nothing.
+    expect(api.streamRequests()).toEqual([]);
   });
 
   it('drops null samples from a GPS dropout without truncating the rep', async () => {
-    const state = await sync();
+    const api = createIntervalsApiStub();
+    const state = await buildDashboardState({
+      athleteId: FIXTURE_ATHLETE_ID,
+      httpGet: api.httpGet,
+      now: FIXTURE_NOW,
+      cachedStreams: cachedStreams('act_run_flys'),
+    });
     // The flys stream holds three reps; a null mid-rep must not split rep 2
     // into two undersized bursts or discard the session.
     const flyReps = state.intervals.filter((i) => i.vMax >= 7.4 && i.vMax <= 8.0 && i.duration <= 12);
     expect(flyReps.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('still builds the dashboard when nothing is cached', async () => {
+    const state = await sync();
+    expect(state.activities.length).toBeGreaterThan(0);
+    expect(state.intervals.length).toBeGreaterThan(0);
   });
 });
 
@@ -405,12 +430,12 @@ describe('buildDashboardState — request windows', () => {
   it('requests enough activity history for the pace curve, and 60 inclusive days of wellness', async () => {
     const api = createIntervalsApiStub();
     const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
-    const activities = api.callsMatching('/activities')[0].path;
+    const activities = api.callsMatching('/activities?')[0].path;
     const wellness = api.callsMatching('/wellness')[0].path;
     // Activities cost one request whatever the window, and the curve's
     // season-to-date range reaches back to January — so the request covers the
     // wider window and the 60-day dashboard view is partitioned out of it.
-    expect(api.callsMatching('/activities')).toHaveLength(1);
+    expect(api.callsMatching('/activities?')).toHaveLength(1);
     expect(activities).toContain('oldest=2025-12-31');
     expect(activities).toContain('newest=2026-09-05');
     expect(state.activities.every((a) => (a.start_date_local ?? '').slice(0, 10) >= '2026-07-07')).toBe(true);
@@ -430,7 +455,7 @@ describe('buildDashboardState — request windows', () => {
     await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
 
     const eventsIndex = api.calls.findIndex((c) => c.path.includes('/events'));
-    const firstActivityIndex = api.calls.findIndex((c) => c.path.includes('/activity/'));
+    const firstActivityIndex = api.calls.findIndex((c) => c.path.includes('intervals=true'));
 
     expect(eventsIndex).toBeGreaterThanOrEqual(0);
     expect(eventsIndex).toBeLessThan(firstActivityIndex);
@@ -454,10 +479,12 @@ describe('buildDashboardState — request windows', () => {
     expect(events).toContain('newest=2026-12-04');
   });
 
-  it('fetches lap data once per run activity', async () => {
+  it('asks for lap data once per run activity, in one bulk request', async () => {
     const api = createIntervalsApiStub();
     const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
-    expect(api.lapDataRequests()).toEqual(state.activities.map((a) => a.id));
+    expect(api.bulkIntervalRequests().flat()).toEqual(state.activities.map((a) => a.id));
+    // The per-activity endpoint is not touched while the bulk one works.
+    expect(api.lapDataRequests()).toEqual([]);
   });
 
   it('does not request lap or stream data for non-run activities', async () => {
@@ -466,7 +493,9 @@ describe('buildDashboardState — request windows', () => {
     const nonRunIds = buildActivityList()
       .filter((a) => a.type !== 'Run' && a.type !== 'TrailRun')
       .map((a) => a.id as string);
+    const requested = api.bulkIntervalRequests().flat();
     for (const id of nonRunIds) {
+      expect(requested).not.toContain(id);
       expect(api.lapDataRequests()).not.toContain(id);
       expect(api.streamRequests()).not.toContain(id);
     }
@@ -734,253 +763,266 @@ describe('buildDashboardState — two-day training recommendation', () => {
   });
 });
 
-describe('buildDashboardState — sprint pace curve', () => {
-  it('charts the default distances for an athlete who has configured none', async () => {
-    const state = await sync();
-    expect(state.paceCurve.points.map((p) => p.distance)).toEqual([...DEFAULT_PACE_CURVE_DISTANCES]);
-  });
-
-  it('charts whatever distances the athlete has configured, ascending', async () => {
-    const api = createIntervalsApiStub();
-    const state = await buildDashboardState({
-      athleteId: FIXTURE_ATHLETE_ID,
-      httpGet: api.httpGet,
-      now: FIXTURE_NOW,
-      paceCurveDistances: [100, 10, 45],
-    });
-    expect(state.paceCurve.points.map((p) => p.distance)).toEqual([10, 45, 100]);
-  });
-
-  it('never publishes a best implying more than the physiological ceiling', async () => {
-    const state = await sync();
-    for (const point of state.paceCurve.points) {
-      if (point.speed === null) continue;
-      expect(point.speed).toBeLessThan(MAX_PLAUSIBLE_SPEED);
-    }
-  });
-
-  it('excludes the GPS spike that would otherwise report 100 m in a second', async () => {
-    const state = await sync();
-    // The fixture stream carries one sample at 102 m/s — the artifact that
-    // makes the upstream pace-curve endpoint unusable below ~250 m.
-    expect(FIXTURE_GPS_SPIKE_SPEED).toBeGreaterThan(MAX_PLAUSIBLE_SPEED);
-    // Whichever session wins the 100 m, it must be won by real running: the
-    // spiked activity may only contribute via its genuine 8 m/s rep.
-    const hundred = state.paceCurve.points.find((p) => p.distance === 100)!;
-    expect(hundred.timeSeconds).toBeGreaterThan(100 / MAX_PLAUSIBLE_SPEED);
-    expect(hundred.speed).toBeLessThanOrEqual(FIXTURE_BEST_RUN_VMAX);
-    expect(state.paceCurve.excludedEfforts).toBe(1);
-
-    // And the spiked session's own best is drawn from the clean stretches.
-    const spiked = state.paceCurveStreams.find((x) => x.activityId === 'act_run_accel')!;
-    const isolated = computePaceCurve({ streams: [spiked], distances: [100], bestVmax60d: FIXTURE_BEST_RUN_VMAX });
-    expect(isolated.excludedEfforts).toBe(1);
-    if (isolated.points[0].speed !== null) {
-      expect(isolated.points[0].speed).toBeLessThanOrEqual(FIXTURE_BEST_RUN_VMAX);
-    }
-  });
-
-  it('reports how many efforts it threw away rather than dropping them silently', async () => {
-    const state = await sync();
-    expect(state.paceCurve.excludedEfforts).toBeGreaterThanOrEqual(1);
-  });
-
-  it('traces every point back to a dated activity inside the window', async () => {
-    const state = await sync();
-    const known = new Map(state.paceCurveStreams.map((s) => [s.activityId, s]));
-    const measured = state.paceCurve.points.filter((p) => p.timeSeconds !== null);
-    expect(measured.length).toBeGreaterThan(0);
-
-    for (const point of measured) {
-      const source = known.get(point.activityId!);
-      expect(source).toBeDefined();
-      expect(point.activityName).toBe(source!.name);
-      expect(point.date).toBe(source!.date);
-      expect(point.date! <= FIXTURE_TODAY).toBe(true);
-    }
-  });
-
-  it('leaves every distance as no-data, not zero, when no stream can be read', async () => {
-    const state = await sync({ failing: { '/streams': 404 } });
-    expect(state.paceCurveStreams).toEqual([]);
-    for (const point of state.paceCurve.points) {
-      expect(point.timeSeconds).toBeNull();
-      expect(point.speed).toBeNull();
-      expect(point.activityId).toBeNull();
-      expect(point.date).toBeNull();
-    }
-  });
-
-  it('still derives the rest of the dashboard when the streams endpoint is down', async () => {
-    const state = await sync({ failing: { '/streams': 500 } });
-    expect(state.age).toBe(FIXTURE_AGE);
-    expect(state.raceEstimates.length).toBeGreaterThan(0);
-  });
-
-  it('produces a monotonic curve', async () => {
-    const api = createIntervalsApiStub();
-    const state = await buildDashboardState({
-      athleteId: FIXTURE_ATHLETE_ID,
-      httpGet: api.httpGet,
-      now: FIXTURE_NOW,
-      paceCurveDistances: [10, 20, 30, 40, 60, 80, 100, 150, 200],
-    });
-    expect(paceCurveMonotonicityViolations(state.paceCurve)).toEqual([]);
-  });
-
-  it('re-charts a different distance set without issuing a single new request', async () => {
-    const api = createIntervalsApiStub();
-    const state = await buildDashboardState({
-      athleteId: FIXTURE_ATHLETE_ID,
-      httpGet: api.httpGet,
-      now: FIXTURE_NOW,
-    });
-    const requestsAfterSync = api.calls.length;
-
-    // This is what the panel does when a chip is toggled or the range changes.
-    const recharted = computePaceCurve({
-      streams: state.paceCurveStreams,
-      distances: [10, 20, 45, 300],
-      since: '2026-06-07',
-      bestVmax60d: state.raceEstimatorInput.bestVmax60d,
-    });
-
-    expect(recharted.points.map((p) => p.distance)).toEqual([10, 20, 45, 300]);
-    expect(api.calls.length).toBe(requestsAfterSync);
-  });
-
-  it('carries the streams the curve was built from, so nothing has to be refetched', async () => {
-    const state = await sync();
-    expect(state.paceCurveStreams.length).toBeGreaterThan(0);
-    for (const stream of state.paceCurveStreams) {
-      expect(stream.velocitySmooth.length).toBeGreaterThan(0);
-      expect(stream.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(stream.name.length).toBeGreaterThan(0);
-    }
-  });
-
-  it('leaves non-run activities out of the curve entirely', async () => {
-    const state = await sync();
-    const nonRunIds = new Set(
-      buildActivityList()
-        .filter((a) => a.type !== 'Run' && a.type !== 'TrailRun')
-        .map((a) => a.id as string),
-    );
-    for (const stream of state.paceCurveStreams) {
-      expect(nonRunIds.has(stream.activityId)).toBe(false);
-    }
-  });
-});
-
-describe('buildDashboardState — the pace curve under a rate limiter', () => {
+describe('buildDashboardState — the request budget', () => {
   /**
-   * Measured on a live account: 118 runs in the season-to-date window issued
-   * 144 requests in four seconds and 64 of them came back 429. The curve was
-   * then built from 4 activities and reported a 400 m "best" of 117 s — a
-   * warm-up jog — because the athlete's real 400 m races were among the
-   * requests that were refused. Nothing in the UI said so.
+   * Measured against the live account before this issue: **80 requests, 3205 ms,
+   * 8 × 429, 2.83 MB on `/activities`**. Of those 80, 54 were `/streams` for a
+   * panel most loads never scrolled to, and 22 were an unbounded
+   * `Promise.allSettled` over `/intervals` — measured peak 22 in flight.
    *
-   * Three defences are tested here: bound the requests, retry the ones that
-   * are refused, and report what was actually read.
+   * The limiter admits 30 requests per short window whatever the concurrency,
+   * so a sync that stays below 30 is refusal-free by construction. These tests
+   * are what keeps it there.
    */
 
-  it('never asks for more streams than the documented bound', async () => {
+  /** The budget the sync is allowed: 4 account-level requests + one per batch. */
+  function budgetFor(runCount: number): number {
+    return 4 + Math.ceil(runCount / BULK_INTERVALS_BATCH_SIZE);
+  }
+
+  it('issues no /streams request at all (AC-1)', async () => {
+    // 60 runs, none of them with lap data — the shape that used to fetch a
+    // stream for every one of them.
+    const api = createIntervalsApiStub({ activities: buildLargeRunAccount(60) });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    expect(api.streamRequests()).toEqual([]);
+    expect(state.paceCurveCandidates.length).toBeGreaterThan(0);
+  });
+
+  it('never puts more than four requests in flight at once (AC-3)', async () => {
+    // Asserted on peak in flight, not on a call count: counting cannot tell 60
+    // sequential requests from 60 simultaneous ones, and it was the
+    // simultaneity that drew the 429.
+    const api = createIntervalsApiStub({ activities: buildLargeRunAccount(60) });
+    await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+    expect(api.peakInFlight()).toBeLessThanOrEqual(4);
+  });
+
+  it('keeps peak concurrency at four even when every batch falls back (AC-3, AC-8)', async () => {
+    // The fallback fans out per activity. It must not overlap the bulk pass,
+    // or the two bounds multiply.
+    const api = createIntervalsApiStub({ activities: buildLargeRunAccount(60), bulkIntervals: 'error' });
+    await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+    expect(api.peakInFlight()).toBeLessThanOrEqual(4);
+  });
+
+  it('stays inside 4 + ceil(R / 25) requests at R = 22 and R = 60 (AC-5)', async () => {
+    for (const runs of [22, 60]) {
+      const api = createIntervalsApiStub({ activities: buildLargeRunAccount(runs) });
+      const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+      expect(state.activities).toHaveLength(runs);
+      expect(api.calls.length, `R=${runs}`).toBeLessThanOrEqual(budgetFor(runs));
+      expect(state.requestCount, `R=${runs}`).toBe(api.calls.length);
+    }
+    // Stated absolutely as well, so the arithmetic itself cannot drift.
+    expect(budgetFor(22)).toBe(5);
+    expect(budgetFor(60)).toBe(7);
+  });
+
+  it('reports the request count it actually issued (FR-31)', async () => {
     const api = createIntervalsApiStub();
     const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
-    expect(api.streamRequests().length).toBeLessThanOrEqual(PACE_CURVE_MAX_STREAM_ACTIVITIES);
-    expect(state.paceCurveCoverage.requested).toBeLessThanOrEqual(PACE_CURVE_MAX_STREAM_ACTIVITIES);
+    expect(state.requestCount).toBe(api.calls.length);
+    // Far below the 30-per-window the limiter admits.
+    expect(state.requestCount).toBeLessThan(30);
   });
 
-  it('retries a rate-limited stream instead of silently dropping the session', async () => {
-    const clean = await sync();
-    const api = createIntervalsApiStub({ rateLimit: { afterRequests: 2, failures: 6 } });
-    const limited = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
-
-    expect(api.rateLimitedCount()).toBe(6);
-    // Having been refused six times, the sync must still end up with the same
-    // curve it gets on a quiet connection.
-    expect(limited.paceCurveCoverage.fetched).toBe(clean.paceCurveCoverage.fetched);
-    expect(limited.paceCurve.points).toEqual(clean.paceCurve.points);
+  it('spends nothing on lap data when the athlete has no runs', async () => {
+    const api = createIntervalsApiStub({ activities: [] });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+    expect(api.bulkIntervalRequests()).toEqual([]);
+    expect(state.requestCount).toBe(4);
   });
 
-  it('reports coverage so a short read is stated rather than implied', async () => {
-    const state = await sync();
-    expect(state.paceCurveCoverage.eligible).toBeGreaterThan(0);
-    expect(state.paceCurveCoverage.fetched).toBeLessThanOrEqual(state.paceCurveCoverage.requested);
-    expect(state.paceCurveCoverage.requested).toBeLessThanOrEqual(state.paceCurveCoverage.eligible);
+  it('hands the pace curve at most the capped set of candidates (AC-4)', async () => {
+    // 80 runs, 60 of them with no lap data at all — the case that leaked 6
+    // stream requests past the cap on the live account, because the lap merge
+    // fetched streams for activities outside the top 40.
+    const api = createIntervalsApiStub({ activities: buildLargeRunAccount(80, 20) });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    expect(state.paceCurveEligible).toBe(80);
+    expect(state.paceCurveCandidates).toHaveLength(PACE_CURVE_MAX_STREAM_ACTIVITIES);
+    expect(new Set(state.paceCurveCandidates.map((a) => a.id)).size).toBe(PACE_CURVE_MAX_STREAM_ACTIVITIES);
+    expect(api.streamRequests()).toEqual([]);
   });
 
-  it('gives up quickly and reports zero coverage when the limiter is saturated', async () => {
-    // Retrying every activity through a full backoff schedule against a
-    // limiter that is refusing everything turns a 4-second sync into a
-    // multi-minute one and still returns nothing. The breaker must stop it.
-    const api = createIntervalsApiStub({ failing: { '/streams': 429 } });
-    const started = Date.now();
-    // A 1 ms schedule: the assertion is that the breaker stops the retrying,
-    // not that the clock advances — sleeping through the real schedule would
-    // make this one test longer than the rest of the suite combined.
-    const state = await buildDashboardState({
-      athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW, retryBackoffMs: 1,
-    });
-    const elapsed = Date.now() - started;
-
-    expect(state.paceCurveCoverage.fetched).toBe(0);
-    expect(state.paceCurveCoverage.requested).toBeGreaterThan(0);
-    for (const point of state.paceCurve.points) expect(point.timeSeconds).toBeNull();
-    // A handful of backoffs, not one per activity. Even at 1 ms a per-activity
-    // retry storm would show up here as tens of thousands of attempts.
-    expect(elapsed).toBeLessThan(5_000);
-  }, 20_000);
-
-  it('prioritises the sessions where the athlete actually sprinted', async () => {
-    // The request cap only costs nothing if it spends its budget on the
-    // sessions a sprint best could live in.
+  it('ranks the candidates by peak speed, so the cap spends its budget on sprints', async () => {
     const api = createIntervalsApiStub();
-    await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
-    const requested = api.streamRequests();
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
     const fastest = buildActivityList()
       .filter((a) => a.type === 'Run' || a.type === 'TrailRun')
       .sort((a, b) => ((b.max_speed as number) ?? 0) - ((a.max_speed as number) ?? 0))
       .slice(0, 5)
       .map((a) => a.id as string);
-    for (const id of fastest) expect(requested).toContain(id);
+    const candidates = state.paceCurveCandidates.map((a) => a.id);
+    for (const id of fastest) expect(candidates).toContain(id);
   });
 });
 
-describe('buildDashboardState — curve accuracy against the athlete own velocity', () => {
-  it('never reports an average speed above the fastest instant the device recorded', async () => {
-    const api = createIntervalsApiStub();
-    const state = await buildDashboardState({
-      athleteId: FIXTURE_ATHLETE_ID,
-      httpGet: api.httpGet,
-      now: FIXTURE_NOW,
-      paceCurveDistances: [10, 20, 30, 40, 60, 80, 100, 150, 200, 300, 400],
-    });
+describe('buildDashboardState — bulk interval data', () => {
+  it('batches ids 25 at a time, against payload rather than URL length (FR-19)', async () => {
+    const api = createIntervalsApiStub({ activities: buildLargeRunAccount(60) });
+    await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
 
-    const peak = Math.max(
-      ...state.paceCurveStreams.flatMap((s) =>
-        s.velocitySmooth.filter((v): v is number => typeof v === 'number')),
-    );
-    for (const point of state.paceCurve.points) {
-      if (point.speed === null) continue;
-      expect(point.speed, `${point.distance} m`).toBeLessThanOrEqual(peak);
+    const batches = api.bulkIntervalRequests();
+    expect(batches.map((b) => b.length).sort((a, b) => b - a)).toEqual([25, 25, 10]);
+    // `fields=` is ignored on this path, so sending it would be noise.
+    for (const call of api.callsMatching('intervals=true')) {
+      expect(call.path).not.toContain('fields=');
     }
   });
 
-  it('is not inflated by a distance stream that disagrees with its own velocity trace', async () => {
-    // act_race_200's distance stream runs 12% ahead of what its velocities
-    // integrate to — the live quirk. Believing it put every point from 10 to
-    // 60 m above the athlete's season peak.
-    const api = createIntervalsApiStub();
-    const state = await buildDashboardState({
+  it('handles a final batch of exactly one', async () => {
+    const api = createIntervalsApiStub({ activities: buildLargeRunAccount(26) });
+    await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+    expect(api.bulkIntervalRequests().map((b) => b.length).sort((a, b) => b - a)).toEqual([25, 1]);
+  });
+
+  it('produces exactly the intervals the per-activity endpoint would (AC-6)', async () => {
+    // Verified live: the two `icu_intervals` payloads are deep-equal, which is
+    // what makes the substitution safe. Here the same claim is made of the
+    // parsed result.
+    const viaBulk = await sync();
+    const viaPerActivity = await sync({ bulkIntervals: 'error' });
+    expect(viaBulk.intervals).toEqual(viaPerActivity.intervals);
+    expect(viaBulk.raceEstimates.map((e) => e.predictedTime))
+      .toEqual(viaPerActivity.raceEstimates.map((e) => e.predictedTime));
+  });
+
+  it('keys the response by id when activities are dropped and reordered (AC-7)', async () => {
+    // The live endpoint returned two activities, reordered, when one of three
+    // requested ids was unknown. Parsing by position would attribute the 100 m
+    // race's laps to the 400 m race.
+    const races = buildActivityList().filter((a) =>
+      a.id === 'act_race_100' || a.id === 'act_race_400');
+    const ghost = { ...races[0], id: 'act_deleted', max_speed: null };
+    const api = createIntervalsApiStub({ activities: [races[0], ghost, races[1]] });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    // The stub reverses what it returns and drops the unknown id, exactly as
+    // the live endpoint did.
+    expect(api.bulkIntervalRequests()[0]).toEqual(['act_race_100', 'act_deleted', 'act_race_400']);
+
+    // The 100 m race's single sprint rep survives, attributed to the 100 m
+    // race. The 400 m rep is past the parser's 25 s sprint ceiling, and the
+    // ghost has no laps at all.
+    expect(state.intervals).toHaveLength(1);
+    expect(state.intervals[0].distance).toBe(100);
+  });
+
+  it('falls back to per-activity requests when the bulk endpoint fails (AC-8)', async () => {
+    const api = createIntervalsApiStub({ bulkIntervals: 'error' });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    expect(api.lapDataRequests().length).toBeGreaterThan(0);
+    expect(state.intervals.length).toBeGreaterThan(0);
+  });
+
+  it('falls back when the response carries no icu_intervals at all (AC-8)', async () => {
+    const api = createIntervalsApiStub({ bulkIntervals: 'no-intervals' });
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    expect(api.lapDataRequests().length).toBeGreaterThan(0);
+    expect(state.intervals).toEqual((await sync()).intervals);
+  });
+
+  it('logs the fallback rather than degrading silently (FR-18)', async () => {
+    const warnings: string[] = [];
+    const api = createIntervalsApiStub({ bulkIntervals: 'error' });
+    await buildDashboardState({
       athleteId: FIXTURE_ATHLETE_ID,
       httpGet: api.httpGet,
       now: FIXTURE_NOW,
-      paceCurveDistances: [10, 20, 30, 60, 100],
+      logger: { info: () => {}, warn: (m: string) => { warnings.push(m); }, error: () => {} },
     });
-    for (const point of state.paceCurve.points) {
-      if (point.speed === null) continue;
-      expect(point.speed, `${point.distance} m`).toBeLessThanOrEqual(FIXTURE_TRACK_200M_PEAK);
+    expect(warnings.some((w) => w.includes('per-activity'))).toBe(true);
+  });
+
+  it('skips one malformed entry without failing the batch (FR-17)', async () => {
+    const api = createIntervalsApiStub();
+    const httpGet = async (url: string) => {
+      const res = await api.httpGet(url);
+      if (!url.includes('intervals=true')) return res;
+      const body = (await res.json()) as unknown[];
+      // One entry with a numeric id — the schema rejects it; the rest stand.
+      return { ...res, json: async () => [{ id: 42, icu_intervals: [] }, ...body] };
+    };
+    const state = await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet, now: FIXTURE_NOW });
+    expect(state.intervals).toEqual((await sync()).intervals);
+    // A malformed entry is not a failed batch, so nothing falls back.
+    expect(api.lapDataRequests()).toEqual([]);
+  });
+
+  it('consumes bulk lap distances as metres, converting nothing (AC-22)', async () => {
+    // The bulk laps carry a 100 m race rep and a 400 m one, in metres. The
+    // parser's own 25 s sprint ceiling is what excludes the second — proof the
+    // numbers arrived on the scale it expects.
+    const state = await sync();
+    const hundred = state.intervals.find((i) => Math.round(i.distance) === 100);
+    expect(hundred).toBeDefined();
+    expect(hundred!.distance).toBe(100);
+    expect(state.intervals.every((i) => i.distance <= 400)).toBe(true);
+  });
+});
+
+describe('buildDashboardState — the activities request', () => {
+  /** Every request path a plain sync issues. */
+  async function requestPaths(): Promise<string[]> {
+    const api = createIntervalsApiStub();
+    await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+    return api.calls.map((c) => c.path);
+  }
+
+  it('names its fields, and the list cannot drift from the schema (AC-9)', async () => {
+    const api = createIntervalsApiStub();
+    await buildDashboardState({ athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW });
+
+    const requested = new URL(`https://x${api.callsMatching('/activities?')[0].path}`)
+      .searchParams.get('fields')!
+      .split(',');
+
+    // Derived from the schema, so a field added there without being added to
+    // the request fails here rather than silently zeroing a chart.
+    const schemaFields = Object.keys(IntervalsActivitySchema.shape)
+      .filter((f) => f !== 'velocity_smooth');
+    expect([...requested].sort()).toEqual([...schemaFields].sort());
+    expect(requested).toEqual([...ACTIVITY_LIST_FIELDS]);
+
+    // The five a hand-written list omitted, each of which drives a chart.
+    for (const field of ['name', 'icu_training_load', 'icu_atl', 'icu_ctl', 'stream_types']) {
+      expect(requested).toContain(field);
+    }
+    // The list endpoint never returns velocity_smooth; asking for it is wrong.
+    expect(requested).not.toContain('velocity_smooth');
+  });
+
+  it('parses a response whose nulls have been elided to absent keys (AC-10)', async () => {
+    // `fields=` "also excludes null values", so max_speed and stream_types are
+    // simply not there on the 5 live runs that have neither.
+    const elided = buildFieldsElidedActivityList();
+    const manual = elided.find((a) => a.id === 'act_run_manual')!;
+    expect('max_speed' in manual).toBe(false);
+    expect('stream_types' in manual).toBe(false);
+
+    const state = await sync({ activities: elided });
+    const parsed = state.activities.find((a) => a.id === 'act_run_manual')!;
+    expect(parsed).toBeDefined();
+    // Absent must mean "no velocity data", exactly as null does.
+    expect(parsed.max_speed).toBeNull();
+    expect(parsed.stream_types ?? null).toBeNull();
+
+    // …and the rest of the dashboard is identical to the un-elided response.
+    const baseline = await sync();
+    expect(state.activities.map((a) => a.id)).toEqual(baseline.activities.map((a) => a.id));
+    expect(state.nfi).toBeCloseTo(baseline.nfi, 10);
+  });
+
+  it('keeps every request metric, with no unit parameter anywhere (AC-22)', async () => {
+    for (const path of await requestPaths()) {
+      expect(path).not.toMatch(/units?=|imperial|miles|feet/i);
     }
   });
 });
