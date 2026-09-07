@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   Zap, Activity, Dumbbell, User, LogOut, Send, Clock, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Info, Timer, Flag, Calendar, Trophy,
 } from 'lucide-react';
-import { SilverSprintLogic, NFIStatus, STRENGTH_ZONE_BANDS, getStrengthZoneBand } from '../domain/sprint/core';
+import { NFIStatus, STRENGTH_ZONE_BANDS, getStrengthZoneBand } from '../domain/sprint/core';
 import { StrengthPeriodization } from '../domain/sprint/periodization';
 import { SprintWorkoutGenerator, SprintWorkout, isStaleVmax } from '../domain/sprint/workouts';
 import { RaceEstimate } from '../domain/sprint/race-estimator';
@@ -13,7 +13,7 @@ import type { DistanceEdit, PaceCurveActivityStream } from '../domain/sprint/pac
 import { StrengthZoneScale } from './StrengthZoneScale';
 import { TwoDayPlanPanel } from './TwoDayPlanPanel';
 import type { TwoDayPlan } from '../domain/sprint/daily-plan';
-import { SprintRacePlan, PriorRaceContext } from '../domain/sprint/race-plan';
+import { SprintRacePlan } from '../domain/sprint/race-plan';
 import type { TrainingPlanContext } from '../domain/sprint/training-plan';
 import { TimeSeriesChart } from './TimeSeriesChart';
 import type { DailyDataPoint } from '../domain/types';

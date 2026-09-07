@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# Pre-commit hygiene gate.
+#
+# Deliberately dependency-free: no husky, no lint-staged, no postinstall that
+# rewrites your git config behind your back. `npm run prepare` points
+# core.hooksPath here and that is the whole mechanism.
+#
+# Order matters. The secret scan runs first and runs always, because it is the
+# only check whose failure cannot be undone by a later commit — once a key is
+# in the history, rewriting it is the easy half and rotating it is the rest.
+#
+# Bypass with `git commit --no-verify` when you genuinely need to (a
+# work-in-progress commit on a branch, say). Nothing here runs in CI's place:
+# CI re-runs the same checks so a bypass cannot reach main unnoticed.
+
+set -e
+
+run() {
+  printf '  %-22s' "$1"
+  shift
+  if out=$("$@" 2>&1); then
+    printf 'ok\n'
+  else
+    printf 'FAILED\n\n'
+    printf '%s\n' "$out"
+    exit 1
+  fi
+}
+
+echo "pre-commit:"
+
+# 1. Secrets — on the staged content, not the working tree.
+run "secret scan" node scripts/scan-secrets.mjs
+
+# Everything below only concerns code. A README-only commit skips it, which
+# keeps documentation edits instant.
+staged=$(git diff --cached --name-only --diff-filter=ACMR -- '*.ts' '*.tsx' '*.js' '*.mjs' || true)
+if [ -z "$staged" ]; then
+  echo "  (no code staged — skipping lint, types and tests)"
+  exit 0
+fi
+
+# 2. Lint only what is staged: the whole-repo run belongs in CI, and a hook
+#    that lints untouched files punishes you for someone else's mess.
+# shellcheck disable=SC2086
+run "lint (staged)" npx eslint --max-warnings 0 $staged
+
+# 3. Types are whole-program by nature — a change here can break a file you did
+#    not touch, which is exactly the case worth catching before the commit.
+run "typecheck" npx tsc --noEmit
+
+# 4. Tests with coverage thresholds. ~5s; the thresholds are a ratchet set just
+#    under current coverage, so this fails on a regression, not on the status quo.
+run "tests + coverage" npx vitest run --coverage
+
+echo "pre-commit: all checks passed"

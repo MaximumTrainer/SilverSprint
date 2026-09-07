@@ -166,7 +166,9 @@ export class SprintRacePlanner {
     'Build phase serves both races — Vmax development transfers directly.';
 
   static getPhase(daysUntil: number): RacePlanPhase {
-    const phase = this.PHASES.find((p) => daysUntil <= p.maxDays)!;
+    // The final phase is `maxDays: Infinity`, so this always matches; the
+    // fallback states that invariant instead of asserting past it.
+    const phase = this.PHASES.find((p) => daysUntil <= p.maxDays) ?? this.PHASES[this.PHASES.length - 1];
     return {
       label: phase.label,
       timeframe: phase.timeframe,

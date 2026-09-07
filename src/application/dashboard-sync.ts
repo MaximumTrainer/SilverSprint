@@ -68,6 +68,14 @@ export interface DashboardSyncDeps {
    * decides what the very first render shows.
    */
   paceCurveDistances?: number[];
+  /**
+   * First backoff step after a `429`, in ms; doubled on each further attempt.
+   *
+   * Exposed so the retry path can be exercised without the test suite actually
+   * sleeping through it — a hard-coded schedule made one test 6 seconds long,
+   * more than half the whole suite, which is a real cost now that hooks run it.
+   */
+  retryBackoffMs?: number;
 }
 
 /**
@@ -178,7 +186,7 @@ const STREAM_FETCH_CONCURRENCY = 4;
  */
 const RATE_LIMIT_RETRIES = 2;
 /** First backoff step after a 429, in ms; doubled on each further attempt. */
-const RATE_LIMIT_BACKOFF_MS = 1000;
+export const RATE_LIMIT_BACKOFF_MS = 1000;
 /**
  * Requests that may exhaust their retries before the sync stops retrying at all.
  *
@@ -194,6 +202,8 @@ const RATE_LIMIT_GIVE_UP_AFTER = 2;
 interface RateLimitBudget {
   exhausted: number;
   retriesDisabled: boolean;
+  /** First backoff step, in ms. */
+  backoffMs: number;
 }
 
 /**
@@ -380,7 +390,11 @@ export async function buildDashboardState(deps: DashboardSyncDeps): Promise<Dash
   const activitiesForIntervals = activities;
   // One budget for the whole sync: the lap burst and the stream fetches share a
   // limiter, so they must share the decision to stop retrying it.
-  const rateLimitBudget: RateLimitBudget = { exhausted: 0, retriesDisabled: false };
+  const rateLimitBudget: RateLimitBudget = {
+    exhausted: 0,
+    retriesDisabled: false,
+    backoffMs: deps.retryBackoffMs ?? RATE_LIMIT_BACKOFF_MS,
+  };
   const intervalFetches = await Promise.allSettled(
     activitiesForIntervals.map(async (a) => {
       const res = await httpGetWithBackoff(httpGet, `${INTERVALS_BASE}/api/v1/activity/${a.id}/intervals`, athleteId, logger, rateLimitBudget);
@@ -790,7 +804,7 @@ async function httpGetWithBackoff(
     );
     const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
       ? retryAfter * 1000
-      : RATE_LIMIT_BACKOFF_MS * 2 ** (attempt - 1);
+      : budget.backoffMs * 2 ** (attempt - 1);
     logger.warn(`Rate limited — retrying in ${waitMs}ms (attempt ${attempt}/${RATE_LIMIT_RETRIES})`, athleteId);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
     response = await httpGet(url);

@@ -6,7 +6,7 @@
  */
 
 import React, { useState } from 'react';
-import { Flag, Calendar, Send, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, AlertTriangle, Zap, Target } from 'lucide-react';
+import { Flag, Send, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, AlertTriangle, Zap, Target } from 'lucide-react';
 import type { TrainingPlanContext } from '../domain/sprint/training-plan';
 import { phaseBadgeLabel, sessionTypeLabel } from '../domain/sprint/training-plan';
 import type { SprintWorkout } from '../domain/sprint/workouts';

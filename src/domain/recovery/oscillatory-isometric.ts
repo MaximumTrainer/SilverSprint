@@ -155,7 +155,7 @@ export class OscillatoryIsometric {
    * Interprets a self-reported relaxation / fluidity score on a 1–10 scale.
    * "On a scale of 1–10, how fluid vs heavy did those pulses feel?"
    */
-  static calculateRelaxationScore(score: 1|2|3|4|5|6|7|8|9|10): RelaxationScoreResult {
+  static calculateRelaxationScore(score: number): RelaxationScoreResult {
     const clamped = Math.max(1, Math.min(10, Math.round(score))) as keyof typeof OscillatoryIsometric.SCORE_MAP;
     return OscillatoryIsometric.SCORE_MAP[clamped];
   }

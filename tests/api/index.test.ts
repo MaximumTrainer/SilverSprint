@@ -232,7 +232,7 @@ describe('Webhook handler — full pipeline with mocked fetch (§5)', () => {
       icu_ctl: 25,
     };
 
-    vi.stubGlobal('fetch', vi.fn(async (url: string, opts?: any) => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, _opts?: any) => {
       if (url.includes('/activity/') && !url.includes('/streams')) {
         return { ok: true, json: async () => invalidActivity };
       }

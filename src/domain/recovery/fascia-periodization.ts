@@ -271,7 +271,10 @@ export class FasciaPeriodization {
    * For muscle athletes OI-type movements have reduced duration (−30%).
    */
   static getDayPlan(week: 1 | 2 | 3 | 4, dayOfWeek: DayOfWeek): FasciaDayPlan {
-    return FasciaPeriodization.generateWeeklyPlan(week, 'fascia').find(d => d.day === dayOfWeek)!;
+    // The plan is built by mapping over every DayOfWeek, so the day is always
+    // present; falling back to Monday keeps the return type honest.
+    const plan = FasciaPeriodization.generateWeeklyPlan(week, 'fascia');
+    return plan.find(d => d.day === dayOfWeek) ?? plan[0];
   }
 
   /**

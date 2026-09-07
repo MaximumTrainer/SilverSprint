@@ -105,8 +105,8 @@ const App: React.FC = () => {
 
   // 2b. Fetch data using our custom hook
   const {
-    intervals, wellness, nfi, nfiStatus, avgVmax, todayVmax,
-    recoveryHours, tsb, strengthZone, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, raceCalibration, dailyPlan, paceCurveStreams, paceCurveCoverage, raceEstimatorInput, loading, error,
+    nfi, nfiStatus, avgVmax, todayVmax,
+    recoveryHours, tsb, srs, staleVmax, age, bodyWeightKg, dailyTimeSeries, raceEstimates, recoveredEstimates, sprintRacePlans, trainingPlan, raceCalibration, dailyPlan, paceCurveStreams, paceCurveCoverage, raceEstimatorInput, loading, error,
   } = useIntervalsData(auth?.athleteId || '', auth?.accessToken || '', auth?.authType || 'basic', raceResults);
 
   const handleOAuthLogin = async () => {

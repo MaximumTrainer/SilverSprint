@@ -7,5 +7,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
       - run: bun install
+
+      # The same four checks the pre-commit hook runs, in the same order.
+      # The hook is a fast local signal and can be bypassed with --no-verify;
+      # this is the gate that cannot, so a bypass never reaches main unnoticed.
+      - name: Secret scan
+        run: bun run scan:secrets
+      - name: Lint
+        run: bun run lint
       - run: bunx tsc --noEmit
-      - run: bun run test
+      - name: Tests and coverage thresholds
+        run: bun run test:coverage

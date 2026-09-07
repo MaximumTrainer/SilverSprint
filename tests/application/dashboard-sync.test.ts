@@ -914,15 +914,22 @@ describe('buildDashboardState — the pace curve under a rate limiter', () => {
     // Retrying every activity through a full backoff schedule against a
     // limiter that is refusing everything turns a 4-second sync into a
     // multi-minute one and still returns nothing. The breaker must stop it.
+    const api = createIntervalsApiStub({ failing: { '/streams': 429 } });
     const started = Date.now();
-    const state = await sync({ failing: { '/streams': 429 } });
+    // A 1 ms schedule: the assertion is that the breaker stops the retrying,
+    // not that the clock advances — sleeping through the real schedule would
+    // make this one test longer than the rest of the suite combined.
+    const state = await buildDashboardState({
+      athleteId: FIXTURE_ATHLETE_ID, httpGet: api.httpGet, now: FIXTURE_NOW, retryBackoffMs: 1,
+    });
     const elapsed = Date.now() - started;
 
     expect(state.paceCurveCoverage.fetched).toBe(0);
     expect(state.paceCurveCoverage.requested).toBeGreaterThan(0);
     for (const point of state.paceCurve.points) expect(point.timeSeconds).toBeNull();
-    // A handful of backoffs, not one per activity.
-    expect(elapsed).toBeLessThan(10_000);
+    // A handful of backoffs, not one per activity. Even at 1 ms a per-activity
+    // retry storm would show up here as tens of thousands of attempts.
+    expect(elapsed).toBeLessThan(5_000);
   }, 20_000);
 
   it('prioritises the sessions where the athlete actually sprinted', async () => {

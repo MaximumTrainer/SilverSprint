@@ -499,7 +499,12 @@ describe('pace-curve — performance', () => {
     const elapsed = Date.now() - started;
 
     expect(curve.points).toHaveLength(12);
-    expect(elapsed).toBeLessThan(500);
+    // V8 coverage instrumentation roughly doubles execution time. The budget
+    // describes an athlete's laptop, not an instrumented run, so the timing
+    // assertion stands down under coverage rather than being loosened for all.
+    if (process.env.COVERAGE !== '1') {
+      expect(elapsed).toBeLessThan(500);
+    }
   });
 });
 

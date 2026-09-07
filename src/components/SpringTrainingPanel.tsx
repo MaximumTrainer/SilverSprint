@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Wind, ChevronDown, ChevronUp, Battery, CheckSquare, BarChart2, Droplets, Brain, Zap, Play, Pause, RotateCcw, Plus, Minus } from 'lucide-react';
+import { Wind, ChevronDown, ChevronUp } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { FasciaPeriodization, AthleteType, FasciaDayPlan } from '../domain/recovery/fascia-periodization';
 import { OscillatoryIsometric } from '../domain/recovery/oscillatory-isometric';
@@ -182,7 +182,7 @@ export const SpringTrainingPanel: React.FC = () => {
   }, [last7BudgetColors]);
 
   const relaxResult = useMemo(
-    () => OscillatoryIsometric.calculateRelaxationScore(relaxationScore as any),
+    () => OscillatoryIsometric.calculateRelaxationScore(relaxationScore),
     [relaxationScore]
   );
 

@@ -368,6 +368,11 @@ Credentials (Athlete ID + API Key) are validated against the Intervals.icu profi
 │   │   └── analytics-invariants.test.ts  # Relationships every figure must satisfy
 │   └── fixtures/
 │       └── intervals-api.ts     # Mock Intervals.icu API (real response shapes)
+├── scripts/
+│   └── scan-secrets.mjs         # Staged-content secret scanner (pre-commit + CI)
+├── .githooks/
+│   └── pre-commit               # Secrets, lint, types, tests + coverage
+├── eslint.config.mjs            # Flat config; rules tsc cannot cover
 ├── logs/                        # Server log output (dev)
 ├── index.html                   # SPA entry
 ├── package.json
@@ -485,9 +490,62 @@ npm run build
 ### Test
 
 ```bash
-npm test            # watch mode
-npx vitest run      # single run (CI)
+npm test              # watch mode
+npx vitest run        # single run
+npm run test:coverage # single run + coverage thresholds
 ```
+
+### Code hygiene
+
+Four checks guard every commit, wired through git's `core.hooksPath` — no
+husky, no `postinstall` that rewrites your git config. `npm install` runs the
+`prepare` script, which points git at `.githooks/`. That is the whole mechanism.
+
+```bash
+npm run verify        # everything the hook and CI run, in one go
+npm run scan:secrets  # secrets, across all tracked files
+npm run lint          # eslint
+npm run typecheck     # tsc --noEmit
+```
+
+| Check | Scope in the hook | Why |
+|---|---|---|
+| **Secret scan** | staged content | Runs first and always, because it is the only failure a later commit cannot undo — once a key is in the history, rewriting it is the easy half and rotating it is the rest. |
+| **Lint** | staged files only | Whole-repo linting belongs in CI; a hook that lints files you did not touch punishes you for someone else's mess. |
+| **Typecheck** | whole program | A change here can break a file you did not touch, which is exactly the case worth catching before the commit. |
+| **Tests + coverage** | whole suite (~5 s) | Thresholds are a **ratchet**, set just under current coverage, so the hook fails on a regression rather than on the status quo. Raise them when coverage rises; never lower them to make a commit pass. |
+
+A commit touching no `.ts`/`.tsx`/`.js`/`.mjs` files runs only the secret scan,
+so documentation edits stay instant. `git commit --no-verify` bypasses the hook;
+CI runs the same four checks, so a bypass cannot reach `main` unnoticed.
+
+#### The secret scanner
+
+`scripts/scan-secrets.mjs` is deliberately hand-written rather than an
+off-the-shelf tool. The two things most likely to leak here are an Intervals.icu
+API key and an athlete id — and the repo is *full* of athlete ids that are
+perfectly fine, because the fixtures are built around `i90210`. A generic
+scanner either flags those forever or is tuned so loosely it misses the real
+one.
+
+It reads the **staged** content rather than the working tree, so it sees what
+would actually be committed. Findings are redacted in the output — enough to
+locate the value, never enough to reprint it. It detects private keys, AWS and
+GitHub tokens, credentials in URLs, `API_KEY:` Basic-auth strings, literal
+`Authorization` headers, hardcoded credential assignments, and Intervals.icu
+athlete ids outside a documented synthetic allowlist. It also refuses forbidden
+paths outright: `.env`, key files, and the `tests/__*.test.ts` live-check
+harnesses that are meant to be deleted after use.
+
+Hardcoded-credential detection tests the **value**, not just the name. This
+repo's auth tests are full of `accessToken: 'oauth-bearer-token'` and
+`apiKey: 'test_key'`; a scanner that cries wolf on those gets switched off
+within a week. A value has to be long, mix letters and digits, and contain no
+placeholder words before it counts.
+
+To record a reviewed exception, put `allowlist secret` in a comment on the
+line. To register a new synthetic athlete id, add it to `ALLOWED_ATHLETE_IDS`
+in the scanner with a note saying where it is used.
 
 ### Deploy
 

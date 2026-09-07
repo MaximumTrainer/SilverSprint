@@ -1,5 +1,4 @@
 import { SilverSprintLogic } from './core';
-import type { StrengthPrescription } from '../types';
 
 export interface Exercise {
   name: string;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SprintWorkoutGenerator, SprintWorkout, isStaleVmax } from '../../../src/domain/sprint/workouts';
+import { SprintWorkoutGenerator, isStaleVmax } from '../../../src/domain/sprint/workouts';
 
 describe('SprintWorkoutGenerator', () => {
   describe('green NFI — max velocity session', () => {

@@ -48,8 +48,8 @@ export function isStaleVmax(nfiStatus: NFIStatus, context?: SprintContext): bool
 export class SprintWorkoutGenerator {
   static generate(nfiStatus: NFIStatus, nfi: number, context?: SprintContext): SprintWorkout {
     // Stale Vmax pathway: NFI is low but athlete is fresh — re-activate, don't rest
-    if (isStaleVmax(nfiStatus, context)) {
-      return this.reactivationWorkout(nfi, context!.tsb);
+    if (context && isStaleVmax(nfiStatus, context)) {
+      return this.reactivationWorkout(nfi, context.tsb);
     }
 
     switch (nfiStatus) {
@@ -309,7 +309,7 @@ export class SprintWorkoutGenerator {
     const intensity = this.toIcuIntensity(intensityStr);
 
     // Time-range: "15–20 min" → take upper bound → "20m"
-    const rangeMinMatch = distanceStr.match(/(\d+)[–\-](\d+)\s*min/i);
+    const rangeMinMatch = distanceStr.match(/(\d+)[-–](\d+)\s*min/i);
     if (rangeMinMatch) return `${rangeMinMatch[2]}m ${intensity} Pace intensity=active`;
 
     // Plain time: "10 min total", "10 min" → "10m"
@@ -328,7 +328,7 @@ export class SprintWorkoutGenerator {
   /** Convert intensity string to intervals.icu notation. */
   private static toIcuIntensity(intensityStr: string): string {
     // Range with en-dash or hyphen: "90–95%", "95–100%", "90-95%"
-    const rangeMatch = intensityStr.match(/^(\d+)[–\-](\d+)%$/);
+    const rangeMatch = intensityStr.match(/^(\d+)[-–](\d+)%$/);
     if (rangeMatch) return `${rangeMatch[1]}-${rangeMatch[2]}%`;
 
     // Single percentage: "100%", "90%"
@@ -348,7 +348,7 @@ export class SprintWorkoutGenerator {
     if (!restStr || restStr === 'N/A' || /^continuous$/i.test(restStr)) return '';
 
     // "3–4 min walk" → "4m Z1 Pace intensity=rest" (use upper bound)
-    const rangeMinMatch = restStr.match(/(\d+)[–\-](\d+)\s*min/i);
+    const rangeMinMatch = restStr.match(/(\d+)[-–](\d+)\s*min/i);
     if (rangeMinMatch) return `${rangeMinMatch[2]}m Z1 Pace intensity=rest`;
 
     // "4 min walk-back", "3 min walk" → "4m Z1 Pace intensity=rest"

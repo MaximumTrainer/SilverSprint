@@ -10,18 +10,6 @@ import { SprintParser, TrackInterval } from '../../../src/domain/sprint/parser';
  *   - Speed Endurance: Velocity maintenance in intervals > 80m
  */
 
-// Helper: generate a simulated 1Hz velocity stream for a sprint rep.
-// At 1Hz, each sample ≈ velocity in m/s, and distance ≈ cumulative sum.
-function buildSprintStream(phases: { velocity: number; seconds: number }[]): number[] {
-  const stream: number[] = [];
-  for (const phase of phases) {
-    for (let i = 0; i < phase.seconds; i++) {
-      stream.push(phase.velocity);
-    }
-  }
-  return stream;
-}
-
 describe('SprintParser.parseTrackSession (§3.1)', () => {
   it('returns empty array for empty velocity stream', () => {
     const result = SprintParser.parseTrackSession({ velocity_smooth: [] });

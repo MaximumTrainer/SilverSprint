@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { z } from 'zod';
 import { IntervalsActivitySchema, IntervalsWellnessSchema, IntervalsIntervalSchema, RUN_ACTIVITY_TYPES } from '../../src/domain/schema';
 
 /**

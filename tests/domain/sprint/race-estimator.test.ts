@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RaceEstimator, RaceEstimatorInput, RaceEstimate, TrainingProfile } from '../../../src/domain/sprint/race-estimator';
+import { RaceEstimator, RaceEstimatorInput, RaceEstimate } from '../../../src/domain/sprint/race-estimator';
 import { TrackInterval } from '../../../src/domain/sprint/parser';
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SilverSprintLogic, NFIStatus, HRVData } from '../../src/domain/sprint/core';
+import { SilverSprintLogic, NFIStatus } from '../../src/domain/sprint/core';
 import { StrengthPeriodization } from '../../src/domain/sprint/periodization';
 import { isStaleVmax } from '../../src/domain/sprint/workouts';
 
