@@ -513,11 +513,22 @@ npm run typecheck     # tsc --noEmit
 | **Secret scan** | staged content | Runs first and always, because it is the only failure a later commit cannot undo — once a key is in the history, rewriting it is the easy half and rotating it is the rest. |
 | **Lint** | staged files only | Whole-repo linting belongs in CI; a hook that lints files you did not touch punishes you for someone else's mess. |
 | **Typecheck** | whole program | A change here can break a file you did not touch, which is exactly the case worth catching before the commit. |
-| **Tests + coverage** | whole suite (~5 s) | Thresholds are a **ratchet**, set just under current coverage, so the hook fails on a regression rather than on the status quo. Raise them when coverage rises; never lower them to make a commit pass. |
+| **Tests + coverage** | whole suite | Thresholds are a **ratchet**, set just under current coverage, so the hook fails on a regression rather than on the status quo. Raise them when coverage rises; never lower them to make a commit pass. |
+
+**Roughly 20 seconds** for a commit touching code, on Windows. The hook calls
+the installed binaries directly rather than through `npx`, which re-resolves
+the package every invocation and cost ~5 s *per call* — 15 s of pure overhead
+across three checks, and the difference between a hook you keep and one you
+disable.
 
 A commit touching no `.ts`/`.tsx`/`.js`/`.mjs` files runs only the secret scan,
 so documentation edits stay instant. `git commit --no-verify` bypasses the hook;
 CI runs the same four checks, so a bypass cannot reach `main` unnoticed.
+
+If 20 seconds is too much for your rhythm, move the slowest check to push time:
+delete the `tests + coverage` line from `.githooks/pre-commit` and put it in a
+`.githooks/pre-push` instead. Commits drop to about 10 seconds and CI still
+enforces the thresholds either way.
 
 #### The secret scanner
 
