@@ -216,7 +216,10 @@ requests at all**.
 The **before** column was measured on a live account with 608 activities
 season-to-date, 118 of them runs and 22 in the 60-day window. The **after**
 column is what the test suite asserts, at `R = 22` and again at `R = 60`, and
-what the two payload measurements below imply.
+what the two payload measurements below imply — it has **not** yet been
+re-measured against a live account. Doing so, and correcting anything here that
+measurement disagrees with, is tracked in
+[#34](https://github.com/MaximumTrainer/SilverSprint/issues/34).
 
 | | Before (measured) | After |
 |---|---|---|
